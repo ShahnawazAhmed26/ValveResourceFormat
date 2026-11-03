@@ -214,9 +214,10 @@ namespace ValveResourceFormat.Renderer.Materials
         /// <param name="material">The parsed Source 2 material data.</param>
         /// <param name="rendererContext">The renderer context used to load shaders and textures.</param>
         /// <param name="shaderArguments">Optional caller-supplied static combo values used as a base; the material's own shader arguments are merged in afterward and take precedence on conflicting keys.</param>
+        /// <param name="shaderDataProvider">Provider of the shader data of the material, for a shader the game of the context does not ship. The provider of the context when <see langword="null"/>.</param>
         [SetsRequiredMembers]
-        public RenderMaterial(Material material, RendererContext rendererContext, Dictionary<string, byte>? shaderArguments)
-            : this(material, rendererContext.ShaderDataProvider)
+        public RenderMaterial(Material material, RendererContext rendererContext, Dictionary<string, byte>? shaderArguments, IShaderDataProvider? shaderDataProvider = null)
+            : this(material, shaderDataProvider ?? rendererContext.ShaderDataProvider)
         {
             Loader = rendererContext.MaterialLoader;
 

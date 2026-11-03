@@ -16,6 +16,11 @@ namespace ValveResourceFormat.ResourceTypes
     public class Material : KeyValuesOrNTRO
     {
         /// <summary>
+        /// The prefix of the shader name of a material converted from a Source 1 material, which has no compiled shader.
+        /// </summary>
+        public const string Source1ShaderPrefix = "source1_";
+
+        /// <summary>
         /// Gets or sets the material name.
         /// </summary>
         public string Name { get; set; } = string.Empty;

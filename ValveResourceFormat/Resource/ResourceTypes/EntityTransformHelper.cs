@@ -66,10 +66,18 @@ namespace ValveResourceFormat.ResourceTypes
         /// <param name="pitchYawRoll">The Euler angles.</param>
         /// <returns>The rotation quaternion.</returns>
         public static Quaternion EulerAnglesToQuaternion(Vector3 pitchYawRoll)
+            => EulerAnglesToQuaternionRadians(Vector3.DegreesToRadians(pitchYawRoll));
+
+        /// <summary>
+        /// Converts Euler angles (pitch, yaw, roll) in radians to a rotation quaternion.
+        /// </summary>
+        /// <param name="pitchYawRoll">The Euler angles, in radians.</param>
+        /// <returns>The rotation quaternion.</returns>
+        public static Quaternion EulerAnglesToQuaternionRadians(Vector3 pitchYawRoll)
         {
-            var (sp, cp) = MathF.SinCos(float.DegreesToRadians(pitchYawRoll.X) * 0.5f);
-            var (sy, cy) = MathF.SinCos(float.DegreesToRadians(pitchYawRoll.Y) * 0.5f);
-            var (sr, cr) = MathF.SinCos(float.DegreesToRadians(pitchYawRoll.Z) * 0.5f);
+            var (sp, cp) = MathF.SinCos(pitchYawRoll.X * 0.5f);
+            var (sy, cy) = MathF.SinCos(pitchYawRoll.Y * 0.5f);
+            var (sr, cr) = MathF.SinCos(pitchYawRoll.Z * 0.5f);
 
             return new Quaternion(
                 sr * cp * cy - cr * sp * sy,

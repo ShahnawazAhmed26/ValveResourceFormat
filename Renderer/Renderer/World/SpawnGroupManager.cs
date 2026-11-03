@@ -155,6 +155,12 @@ public sealed class SpawnGroupManager
     {
         if (group.EntityLumpName != null)
         {
+            // A template with no compiled entities spawns an empty instance, which needs no world
+            if (group.EntityLumpName.Length == 0)
+            {
+                return null;
+            }
+
             var loaded = FindLoadedWorld(group.WorldGroup, group.MapName);
 
             if (loaded == null)

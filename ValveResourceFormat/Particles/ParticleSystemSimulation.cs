@@ -258,6 +258,7 @@ namespace ValveResourceFormat.Particles
         private readonly List<ParticleSystemSimulation> childSimulations;
         private readonly ILogger logger;
         private readonly IFileLoader fileLoader;
+        private readonly Func<string, ParticleSystem?>? childResolver;
 
         /// <summary>Resolves the resources the definition and its functions name.</summary>
         internal IFileLoader FileLoader => fileLoader;
@@ -318,6 +319,7 @@ namespace ValveResourceFormat.Particles
             childSimulations = [];
             this.logger = logger ?? NullLogger.Instance;
             this.fileLoader = fileLoader;
+            childResolver = particleSystem.ChildResolver;
 
             var rootData = particleSystem.GetUpgradedData();
             Definition = rootData;
@@ -392,7 +394,7 @@ namespace ValveResourceFormat.Particles
                 Data = this,
             };
 
-            Name = particleSystem.Resource?.FileName ?? "<unnamed>";
+            Name = particleSystem.Resource?.FileName ?? particleSystem.Name ?? "<unnamed>";
 
             IReadOnlyList<KVObject> Functions(string key) => rootData.GetArray(key) ?? [];
 

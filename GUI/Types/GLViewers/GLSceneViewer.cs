@@ -132,7 +132,7 @@ namespace GUI.Types.GLViewers
 
             Renderer = new(rendererContext);
             Input = new UserInput(Renderer);
-            EntityVisuals = new HammerEntityVisuals(rendererContext.FileLoader, rendererContext.Logger);
+            EntityVisuals = new HammerEntityVisuals(rendererContext);
             Renderer.EntitySystem.ToolVisuals = EntityVisuals;
             Renderer.Settings.DrawFilter = Tools;
             TextRenderer = new(rendererContext, Renderer.Camera);
@@ -199,7 +199,11 @@ namespace GUI.Types.GLViewers
 
                 if (!HasToolsVisibilityControls)
                 {
-                    UiControl.AddCheckBox("Show Tools", Tools.ShowTools, (v) => Tools.ShowTools = v);
+                    UiControl.AddCheckBox("Show Tools", Tools.ShowTools, (v) =>
+                    {
+                        Tools.ShowTools = v;
+                        RequestVisibilityUpdate();
+                    });
                 }
 
                 if (Renderer.Scenes.Any(static scene => scene.LightingInfo.LightProbes.Count > 0))

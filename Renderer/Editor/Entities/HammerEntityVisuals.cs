@@ -10,6 +10,7 @@ using ValveResourceFormat.Renderer.Entities;
 using ValveResourceFormat.Renderer.SceneNodes;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
+using ValveResourceFormat.Source1.Entities;
 using ValveResourceFormat.Utils;
 
 namespace ValveResourceFormat.Renderer.Editor.Entities;
@@ -57,6 +58,20 @@ public sealed class HammerEntityVisuals : IEntityToolVisuals
         ArgumentNullException.ThrowIfNull(logger);
 
         classes = new Lazy<EntityClassTable>(() => EntityClassCatalog.Get(fileLoader, logger));
+    }
+
+    /// <summary>
+    /// Initializes the visuals for the entities of what a renderer context shows. A Source 1 game has no game info the
+    /// file loader finds, so its classes are found by the Steam app id of its file system.
+    /// </summary>
+    /// <param name="rendererContext">The context of what is shown.</param>
+    public HammerEntityVisuals(RendererContext rendererContext)
+    {
+        ArgumentNullException.ThrowIfNull(rendererContext);
+
+        classes = new Lazy<EntityClassTable>(() => rendererContext.Source1FileSystem is { } fileSystem
+            ? Source1EntityClassCatalog.Get(fileSystem, rendererContext.Logger)
+            : EntityClassCatalog.Get(rendererContext.FileLoader, rendererContext.Logger));
     }
 
     /// <summary>Finds the entity a node is drawn for, with the helpers of its class.</summary>

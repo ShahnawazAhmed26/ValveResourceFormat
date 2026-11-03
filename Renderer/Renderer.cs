@@ -160,7 +160,7 @@ public class Renderer : ISceneHost
     public IReadOnlyList<Scene> Scenes => scenes;
 
     /// <summary>Gets whether a 3D sky can be drawn, from a <c>skybox_reference</c> or a <c>sky_camera_volume</c>.</summary>
-    public bool HasSky => EntitySystem.ActiveSkyboxReference != null || EntitySystem.SkyCameraVolumes.Count > 0;
+    public bool HasSky => EntitySystem.ActiveSkyboxReference != null || EntitySystem.SkyCameraVolumes.Count > 0 || fixedSkyScene != null;
 
     /// <summary>Gets the main scene state in the main view, or <see langword="null"/> until the first update.</summary>
     public SceneViewState? MainViewState => mainViewStates.GetValueOrDefault(Scene);
@@ -307,6 +307,8 @@ public class Renderer : ISceneHost
     private bool screenSpaceAoComputed;
 
     private readonly List<Scene> scenes = [];
+    private Scene? fixedSkyScene;
+    private SkyTransform fixedSky;
     private readonly Dictionary<Scene, SceneViewState> mainViewStates = [];
     private readonly Dictionary<Scene, SceneViewState> skyViewStates = [];
     private readonly Dictionary<Scene, SceneViewState>[] sunCascadeViewStates = [[], [], []];
@@ -396,6 +398,33 @@ public class Renderer : ISceneHost
         scene.Settings = Settings;
         scene.PhysicsWorld ??= EntitySystem.GetPhysicsWorld(scene.WorldGroup);
         scenes.Add(scene);
+    }
+
+    /// <summary>
+    /// Draws <paramref name="skyScene"/> as the 3D sky of the main scene, without a <c>skybox_reference</c> entity.
+    /// The scene must have a world group, so the main view leaves it out.
+    /// </summary>
+    /// <param name="skyScene">The sky scene, added to the renderer if it is not already.</param>
+    /// <param name="sky">Where the sky is seen from, and at what scale.</param>
+    public void SetFixedSky(Scene skyScene, SkyTransform sky)
+    {
+        ArgumentNullException.ThrowIfNull(skyScene);
+
+        if (skyScene.WorldGroup == null)
+        {
+            throw new ArgumentException("The sky scene needs a world group.", nameof(skyScene));
+        }
+
+        if (!scenes.Contains(skyScene))
+        {
+            AddScene(skyScene);
+        }
+
+        skyScene.ToViewerWorld = sky.SkyToWorld;
+        skyScene.MarkerScale = 1f / sky.Scale;
+
+        fixedSkyScene = skyScene;
+        fixedSky = sky;
     }
 
     /// <inheritdoc/>
@@ -489,6 +518,26 @@ public class Renderer : ISceneHost
                 SkyOverride = target.SkyMaterialName is { } skyMaterial ? SkyOverrideFor(skyMaterial) : null,
                 SkyCastsSunShadows = volume.WorldReceivesSkyboxShadows,
                 SkyReceivesSunShadows = volume.SkyboxReceivesWorldShadows,
+            };
+
+            return frameViews.AsSpan(0, count);
+        }
+
+        if (fixedSkyScene is { } skyScene)
+        {
+            skyViewSceneStates.Clear();
+            skyViewSceneStates.Add(ViewStateFor(skyViewStates, skyScene));
+
+            ConfigureSkyCamera(fixedSky, camera);
+            skyFog.SetToSkyView(Scene.FogInfo, skyScene.FogInfo);
+
+            frameViews[count++] = new SceneView
+            {
+                States = skyViewSceneStates,
+                Camera = SkyCamera,
+                Sky = fixedSky,
+                Fog = skyFog,
+                LockedCullFrustum = lockedSkyCullFrustum,
             };
 
             return frameViews.AsSpan(0, count);
@@ -993,7 +1042,16 @@ public class Renderer : ISceneHost
         Textures.Add(new(ReservedTextureSlots.FogCubeTexture, "g_tFogCubeTexture", defaultCubeTexture));
 
         const string blueNoiseName = "blue_noise_256.vtex_c";
-        var blueNoiseResource = RendererContext.FileLoader.LoadFile("textures/dev/" + blueNoiseName);
+        const string blueNoisePath = "textures/dev/" + blueNoiseName;
+        Resource? blueNoiseResource = null;
+
+        // Looked up quietly, since games without it use the embedded copy
+        var (blueNoiseOnDisk, _, blueNoiseEntry) = RendererContext.FileLoader.FindFile(blueNoisePath, logNotFound: false);
+
+        if (blueNoiseOnDisk != null || blueNoiseEntry != null)
+        {
+            blueNoiseResource = RendererContext.FileLoader.LoadFile(blueNoisePath);
+        }
 
         // Preferred from the game, embedded otherwise
         if (blueNoiseResource?.DataBlock is not Texture)
@@ -1360,6 +1418,7 @@ public class Renderer : ISceneHost
         DeleteViewStates();
         DeleteSkyOverrides();
 
+        fixedSkyScene = null;
         scenes.Clear();
         scenes.Add(Scene);
     }

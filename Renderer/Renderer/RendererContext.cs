@@ -1,9 +1,14 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
+using System.IO;
 using System.Threading;
 using Microsoft.Extensions.Logging;
 using ValveResourceFormat.IO;
+using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.ResourceTypes.ModelAnimation;
+using ValveResourceFormat.Source1.FileSystem;
+using ValveResourceFormat.Source1.Model;
+using ValveResourceFormat.Source1.Particles;
 
 namespace ValveResourceFormat.Renderer;
 
@@ -21,6 +26,79 @@ public class RendererContext : IDisposable
     /// Game file loader for loading resources from packages.
     /// </summary>
     public GameFileLoader FileLoader { get; }
+
+    /// <summary>
+    /// File system of the Source 1 game that <c>.vmt</c> materials and <c>.vtf</c> textures are read from.
+    /// </summary>
+    internal Source1FileSystem? Source1FileSystem { get; set; }
+
+    /// <summary>
+    /// Whether Source 1 materials are loaded in high dynamic range, which selects the <c>hdr</c> variants of their
+    /// conditional blocks and the <c>.hdr.vtf</c> variants of their cube maps. Maps without high dynamic range lighting turn it off.
+    /// It has to be set before the materials of the map are loaded.
+    /// </summary>
+    internal bool Source1HighDynamicRange { get; set; } = true;
+
+    private readonly Dictionary<string, Source1Model?> source1Models = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Loads a model of the Source 1 game once, for everything that draws it.
+    /// </summary>
+    /// <param name="path">The path of the model, such as <c>models/props/crate.mdl</c>.</param>
+    /// <returns>The model, or <see langword="null"/> when the game has none of that name or it does not load.</returns>
+    internal Source1Model? LoadSource1Model(string path)
+    {
+        lock (source1Models)
+        {
+            if (source1Models.TryGetValue(path, out var cached))
+            {
+                return cached;
+            }
+
+            Source1Model? model = null;
+
+            if (Source1FileSystem != null && Source1FileSystem.Exists(path))
+            {
+                try
+                {
+                    model = Source1Model.Load(path, Source1FileSystem.OpenFile);
+                }
+                catch (Exception e) when (e is InvalidDataException or IOException or NotSupportedException or UnexpectedMagicException)
+                {
+                    Logger.LogWarning("Failed to load model {Model}: {Message}", path, e.Message);
+                }
+            }
+
+            source1Models[path] = model;
+            return model;
+        }
+    }
+
+    private Source1ParticleLibrary? source1Particles;
+
+    /// <summary>
+    /// The particle systems of the Source 1 game, or <see langword="null"/> without a <see cref="Source1FileSystem"/>.
+    /// </summary>
+    internal Source1ParticleLibrary? Source1Particles
+    {
+        get
+        {
+            if (source1Particles == null && Source1FileSystem != null)
+            {
+                source1Particles = new Source1ParticleLibrary(Source1FileSystem, Logger);
+            }
+
+            return source1Particles;
+        }
+    }
+
+    /// <summary>
+    /// Loads a particle system by name from the Source 1 game when it has one of that name, and from the game files otherwise.
+    /// </summary>
+    /// <param name="name">The name of the particle system.</param>
+    /// <returns>The particle system, or <see langword="null"/> when there is none.</returns>
+    internal ParticleSystem? LoadParticleSystem(string name)
+        => Source1Particles?.GetParticleSystem(name) ?? FileLoader.LoadFileCompiled(name)?.DataBlock as ParticleSystem;
 
     /// <summary>
     /// Information lookup from compiled shaders (.vcs).

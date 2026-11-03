@@ -18,7 +18,7 @@ namespace ValveResourceFormat.Renderer
         public int Handle { get; private set; }
 
         /// <summary>Gets optional spritesheet layout data when the texture is a sprite atlas.</summary>
-        public Texture.SpritesheetData? SpriteSheetData { get; }
+        public Texture.SpritesheetData? SpriteSheetData { get; init; }
 
         /// <summary>Gets the width of the texture in texels.</summary>
         public int Width { get; }
@@ -114,11 +114,12 @@ namespace ValveResourceFormat.Renderer
         /// <param name="format">Internal pixel format.</param>
         /// <param name="mipCount">Number of mip levels to allocate.</param>
         /// <param name="label">Label string visible in graphics debuggers.</param>
+        /// <param name="srgb">When <see langword="true"/>, the texels are sRGB encoded and sampled as linear.</param>
         /// <returns>The newly created render texture.</returns>
-        public static RenderTexture Create(int width, int height, ImageFormat format, int mipCount, string label)
+        public static RenderTexture Create(int width, int height, ImageFormat format, int mipCount, string label, bool srgb = false)
         {
             var texture = new RenderTexture(TextureTarget.Texture2D, width, height, 1, mipCount, label);
-            GL.TextureStorage2D(texture.Handle, mipCount, format.ToGLSizedInternalFormat(), width, height);
+            GL.TextureStorage2D(texture.Handle, mipCount, format.ToGLSizedInternalFormat(srgb), width, height);
             return texture;
         }
 

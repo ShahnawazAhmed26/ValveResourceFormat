@@ -65,16 +65,15 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         }
 
         public SpriteSceneNode(Scene scene, RendererContext renderContext, Resource resource, Vector3 position, SpriteBorder? border = null)
+            : this(scene, renderContext.MaterialLoader.LoadMaterial(resource, CreateShaderArguments(scene, border)), System.IO.Path.GetFileName(resource.FileName) ?? string.Empty, position, border)
+        {
+        }
+
+        /// <summary>Initializes a sprite drawn with a material the caller loaded with <see cref="CreateShaderArguments"/>.</summary>
+        public SpriteSceneNode(Scene scene, RenderMaterial material, string name, Vector3 position, SpriteBorder? border = null)
             : base(scene)
         {
-            var shaderArguments = scene.LightingInfo.CreateShaderArguments();
-
-            if (border != null)
-            {
-                shaderArguments["D_BORDER"] = 1;
-            }
-
-            material = renderContext.MaterialLoader.LoadMaterial(resource, shaderArguments);
+            this.material = material;
             this.border = border;
 
             // Forcefully clamp sprites so they don't render extra pixels on edges
@@ -83,7 +82,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
                 texture.SetWrapMode(RsTextureAddressMode.Clamp);
             }
 
-            var label = $"{nameof(SpriteSceneNode)}: {System.IO.Path.GetFileName(resource.FileName)}";
+            var label = $"{nameof(SpriteSceneNode)}: {name}";
             var vboHandle = GraphicsDevice.CreateBuffer<Vertex>(label, Vertices, BufferUsage.Static);
 
             vao = Vertex.InputLayout.CreateVertexArray(label, vboHandle);
@@ -95,6 +94,21 @@ namespace ValveResourceFormat.Renderer.SceneNodes
             Transform = Matrix4x4.CreateTranslation(position.X, position.Y, position.Z);
 
             RenderPasses |= CustomRenderPasses.DepthOnly;
+        }
+
+        /// <summary>Creates the shader combos the material of a sprite is loaded with.</summary>
+        /// <param name="scene">The scene the sprite is in.</param>
+        /// <param name="border">The border of the sprite, if it has one.</param>
+        public static Dictionary<string, byte> CreateShaderArguments(Scene scene, SpriteBorder? border)
+        {
+            var shaderArguments = scene.LightingInfo.CreateShaderArguments();
+
+            if (border != null)
+            {
+                shaderArguments["D_BORDER"] = 1;
+            }
+
+            return shaderArguments;
         }
 
         public override void Update(Scene.UpdateContext context)
