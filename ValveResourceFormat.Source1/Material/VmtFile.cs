@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.IO;
+using ValveKeyValue;
 
 namespace ValveResourceFormat.Source1.Material;
 
@@ -9,6 +11,10 @@ internal sealed partial class VmtFile
 {
     private static readonly string[] ShaderSuffixes =
         ["_dx9_hdr", "_dx90", "_dx95", "_dx9", "_dx80", "_dx81", "_dx8", "_dx70", "_dx7", "_dx60", "_dx6"];
+
+    // The symbols that can hold in a bracket condition; the others are always false
+    private static readonly string[] ConditionSymbols =
+        ["WIN32", "WINDOWS", "HDR", "LDR", "SRGB", "SRGB_PC", "GPU>=1", "GPU>=2", "GPU>=3"];
 
     public string MaterialPath { get; }
     public string ShaderName => Root.Name;
@@ -73,16 +79,10 @@ internal sealed partial class VmtFile
 
         var context = new LoadContext(openFile, resolveCondition);
         var normalizedPath = NormalizePath(path, ".vmt");
-        var roots = LoadRoots(normalizedPath, context);
-
-        if (roots.Count == 0)
-        {
-            throw new InvalidDataException($"VMT has no active shader root: {path}");
-        }
-
+        var root = LoadRoot(normalizedPath, context);
         var hdr = context.Resolve("hdr");
 
-        return new VmtFile(normalizedPath, roots[0], hdr);
+        return new VmtFile(normalizedPath, root, hdr);
     }
 
     private static string NormalizeShaderName(string shader)
@@ -156,7 +156,7 @@ internal sealed partial class VmtFile
         yield return "dx9";
     }
 
-    private static List<VmtNode> LoadRoots(string path, LoadContext context)
+    private static VmtNode LoadRoot(string path, LoadContext context)
     {
         if (context.Cache.TryGetValue(path, out var cached))
         {
@@ -175,15 +175,15 @@ internal sealed partial class VmtFile
                 throw new InvalidDataException("VMT dependency count exceeds 256 files.");
             }
 
-            var roots = ReadRoots(path, context);
+            var root = ReadRoot(path, context);
 
-            if (IsPatch(roots))
+            if (IsPatch(root))
             {
-                roots = ExpandPatch(path, roots, context);
+                root = ExpandPatch(path, root, context);
             }
 
-            context.Cache.Add(path, roots);
-            return roots;
+            context.Cache.Add(path, root);
+            return root;
         }
         finally
         {
@@ -224,7 +224,7 @@ internal sealed partial class VmtFile
         return new VmtNode(target.Name, target.Value, children);
     }
 
-    private static List<VmtNode> ReadRoots(string path, LoadContext context)
+    private static VmtNode ReadRoot(string path, LoadContext context)
     {
         if (++context.FileCount > 256)
         {
@@ -232,46 +232,133 @@ internal sealed partial class VmtFile
         }
 
         using var stream = context.OpenFile(path) ?? throw new FileNotFoundException($"VMT not found: {path}", path);
-        using var reader = new StreamReader(stream);
-        var parser = new Parser(reader.ReadToEnd(), path, context);
-        var roots = parser.ReadDocument();
-
-        // Native KeyValues appends #include roots after local roots, regardless of directive position.
-        foreach (var include in parser.Includes)
+        var directives = new DirectiveRecorder();
+        var options = new KVSerializerOptions
         {
-            roots.AddRange(LoadRoots(ResolveDirectivePath(path, include), context));
-        }
+            HasEscapeSequences = false,
+            FileLoader = directives,
+        };
 
-        foreach (var basePath in parser.Bases)
+        foreach (var symbol in ConditionSymbols)
         {
-            var bases = LoadRoots(ResolveDirectivePath(path, basePath), context);
-
-            if (roots.Count != 0 && bases.Count != 0)
+            if (context.Resolve(symbol))
             {
-                roots[0] = Merge(roots[0], bases[0], replace: false);
+                options.Conditions.Add(symbol);
             }
         }
 
-        return roots;
+        KVDocument document;
+
+        try
+        {
+            document = KVSerializer.Create(KVSerializationFormat.KeyValues1Text).Deserialize(stream, options);
+        }
+        catch (KeyValueException e)
+        {
+            throw new InvalidDataException($"Cannot read VMT {path}: {e.Message}", e);
+        }
+
+        if (!document.Root.IsCollection)
+        {
+            throw new InvalidDataException($"VMT has no shader block: {path}");
+        }
+
+        var root = ConvertBlock(document.Name ?? string.Empty, document.Root, context, 0);
+
+        foreach (var basePath in directives.Paths)
+        {
+            var baseRoot = LoadRoot(ResolveDirectivePath(path, basePath), context);
+            root = Merge(root, baseRoot, replace: false);
+        }
+
+        return root;
     }
 
-    private static bool IsPatch(List<VmtNode> roots)
-        => roots.Count != 0 && roots[0].Name.Equals("patch", StringComparison.OrdinalIgnoreCase);
+    private static VmtNode ConvertBlock(string name, KVObject block, LoadContext context, int depth)
+    {
+        if (depth >= 64)
+        {
+            throw new InvalidDataException("VMT block nesting limit exceeded.");
+        }
+
+        var children = new List<VmtNode>();
+
+        foreach (var (key, value) in block.Children)
+        {
+            var childName = ResolveKeyCondition(key, context);
+
+            if (childName is null)
+            {
+                continue;
+            }
+
+            if (value.IsCollection)
+            {
+                children.Add(ConvertBlock(childName, value, context, depth + 1));
+            }
+            else
+            {
+                children.Add(new VmtNode(childName, value.ToString(CultureInfo.InvariantCulture), []));
+            }
+        }
+
+        return new VmtNode(name, null, children);
+    }
+
+    // A key can start with a condition and a question mark, like "!srgb?$key". Returns the key without the
+    // condition, or null when the condition does not hold.
+    private static string? ResolveKeyCondition(string key, LoadContext context)
+    {
+        var separator = key.IndexOf('?', StringComparison.Ordinal);
+
+        if (separator < 0)
+        {
+            return key;
+        }
+
+        var name = key[(separator + 1)..];
+        var symbol = key[..separator];
+        var negate = false;
+
+        while (symbol.StartsWith('!'))
+        {
+            negate = !negate;
+            symbol = symbol[1..];
+        }
+
+        if (symbol.StartsWith('$'))
+        {
+            symbol = symbol[1..];
+        }
+
+        if (symbol.Length == 0 || name.Length == 0)
+        {
+            return null;
+        }
+
+        var value = context.Resolve(symbol);
+        var holds = negate ? !value : value;
+
+        return holds ? name : null;
+    }
+
+    private static bool IsPatch(VmtNode root)
+        => root.Name.Equals("patch", StringComparison.OrdinalIgnoreCase);
 
     // The chain of patch files is followed first and their insert and replace sections are gathered, so the
     // values of the patch nearest the shader win. The sections are applied to the final material once, insert
     // before replace.
-    private static List<VmtNode> ExpandPatch(string path, List<VmtNode> roots, LoadContext context)
+    private static VmtNode ExpandPatch(string path, VmtNode root, LoadContext context)
     {
         const int MaxPatchDepth = 10;
 
         var insert = new VmtNode("insert", null, []);
         var replace = new VmtNode("replace", null, []);
-        var current = roots;
+        var current = root;
 
         for (var depth = 0; depth < MaxPatchDepth && IsPatch(current); depth++)
         {
-            var patch = current[0];
+            var patch = current;
 
             if (patch.GetBlock("insert") is { } insertSection)
             {
@@ -288,19 +375,17 @@ internal sealed partial class VmtFile
                 throw new InvalidDataException($"VMT patch has no include: {path}");
             }
 
-            current = ReadRoots(NormalizePath(include, ".vmt"), context);
+            current = ReadRoot(NormalizePath(include, ".vmt"), context);
         }
 
-        if (current.Count == 0 || IsPatch(current))
+        if (IsPatch(current))
         {
             throw new InvalidDataException($"VMT patch include has no active shader root: {path}");
         }
 
-        var merged = Overlay(current[0], insert);
-        merged = Merge(merged, replace, replace: true);
-        current[0] = merged;
+        var merged = Overlay(current, insert);
 
-        return current;
+        return Merge(merged, replace, replace: true);
     }
 
     // Sets the values of changes over the ones of the target and merges its blocks into the blocks of the same name
@@ -443,11 +528,24 @@ internal sealed partial class VmtFile
         return path;
     }
 
+    // Remembers the files named by #base and #include directives instead of reading them, so they go through the same
+    // loading and merging as patch includes.
+    private sealed class DirectiveRecorder : IIncludedFileLoader
+    {
+        public List<string> Paths { get; } = [];
+
+        public Stream OpenFile(string filePath)
+        {
+            Paths.Add(filePath);
+            return new MemoryStream("\"\" {}"u8.ToArray());
+        }
+    }
+
     private sealed class LoadContext(Func<string, Stream?> openFile, Func<string, bool?>? resolveCondition)
     {
         public Func<string, Stream?> OpenFile { get; } = openFile;
         public HashSet<string> Active { get; } = new(StringComparer.OrdinalIgnoreCase);
-        public Dictionary<string, List<VmtNode>> Cache { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, VmtNode> Cache { get; } = new(StringComparer.OrdinalIgnoreCase);
         public int FileCount;
 
         // Unknown symbols are false.

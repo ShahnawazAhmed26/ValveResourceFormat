@@ -129,6 +129,10 @@ Source 1 maps, models, materials and textures are converted to Source 2 resource
   - SpriteCard, Subrect, SplineRope and Grass
   - ShatteredGlass, Core, EyeBall, VolumeClouds, and the Black Mesa `bms_*` and portal shaders
   - Black Mesa `$emissiveblend`
+  - malformed VMT files that the game still reads (the material falls back):
+    - a block that is not closed, like `materials/models/headcrab_classic/headcrabsheet.vmt` in Half-Life 2
+    - a key without a value at the end of the file, like `materials/models/props_badlands/beam.vmt` in Team Fortress 2
+    - an unquoted value in brackets, like `materials/models/props_xen/crystals/xen_crystal4.vmt` in Black Mesa
 - Entities:
   - `env_projectedtexture`
   - `beam_spotlight` and `point_spotlight`
