@@ -293,11 +293,6 @@ internal sealed class Source1EntityModels
     {
         var className = entity.ClassName;
 
-        if (UsesModelKey(className))
-        {
-            return Create(entity, entity.GetString("model"));
-        }
-
         switch (className)
         {
             case "item_teamflag":
@@ -370,14 +365,6 @@ internal sealed class Source1EntityModels
         var path = entity.GetString("model");
 
         return path.Length > 0 ? path : defaultPath;
-    }
-
-    private static bool UsesModelKey(string className)
-    {
-        return className.StartsWith("prop_dynamic", StringComparison.Ordinal)
-            || className.StartsWith("prop_physics", StringComparison.Ordinal)
-            || className.StartsWith("prop_vehicle", StringComparison.Ordinal)
-            || className is "prop_door_rotating" or "prop_static";
     }
 
     // Props and characters of mods that the rules above do not know show the model the mapper set

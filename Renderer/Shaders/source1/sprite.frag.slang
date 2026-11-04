@@ -2,6 +2,7 @@
 
 #include "sprite_features.slang"
 #include "common_ps.slang"
+#include "common_rendermodes_ps.slang"
 #include "../common/depth.slang"
 
 in vec3 vFragPosition;
@@ -70,4 +71,10 @@ void main()
     }
 
     outputColor = vec4(color, baseColor.a * vVertexColorOut.a);
+
+    if (g_iRenderMode != 0)
+    {
+        vec3 facing = vec3(0.0, 0.0, 1.0);
+        ApplySource1RenderModes(outputColor, baseColor.rgb * vVertexColorOut.rgb, vVertexColorOut, facing, facing, g_tColor, vTexCoordOut);
+    }
 }

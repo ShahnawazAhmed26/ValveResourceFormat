@@ -1,3 +1,4 @@
+using ValveResourceFormat.Source1.Material;
 using static ValveResourceFormat.Source1.Bsp.BspMeshBuilder;
 
 namespace ValveResourceFormat.Source1.Bsp;
@@ -16,8 +17,8 @@ internal static class BspOverlayBuilder
     /// <param name="firstFace">The first face of the model.</param>
     /// <param name="endFace">The face after the last face of the model.</param>
     /// <param name="mesh">The model mesh that receives the overlays.</param>
-    /// <param name="getDecalSize">Gets the world size of an <c>infodecal</c> texture, or null when the material is unknown. Decals are skipped when this is null.</param>
-    public static void AddOverlays(BuildContext context, int firstFace, int endFace, BspModelMesh mesh, Func<string, Vector2?>? getDecalSize = null)
+    /// <param name="getMaterialInfo">Reads the texture size and decal scale of a material, or returns null when it is unknown. Decals are skipped when this is null.</param>
+    public static void AddOverlays(BuildContext context, int firstFace, int endFace, BspModelMesh mesh, Func<string, Source1MaterialInfo?>? getMaterialInfo = null)
     {
         var bsp = context.Bsp;
         var scratch = new Scratch();
@@ -46,9 +47,9 @@ internal static class BspOverlayBuilder
         }
 
         // The engine puts a decal on the world only
-        if (getDecalSize != null && mesh.ModelIndex == 0)
+        if (getMaterialInfo != null && mesh.ModelIndex == 0)
         {
-            AddDecals(context, firstFace, endFace, mesh, getDecalSize, scratch);
+            AddDecals(context, firstFace, endFace, mesh, getMaterialInfo, scratch);
         }
     }
 
@@ -107,7 +108,7 @@ internal static class BspOverlayBuilder
     // How far from the decal origin a face plane may be for the decal to land on it
     private const float DecalDistance = 4f;
 
-    private static void AddDecals(BuildContext context, int firstFace, int endFace, BspModelMesh mesh, Func<string, Vector2?> getDecalSize, Scratch scratch)
+    private static void AddDecals(BuildContext context, int firstFace, int endFace, BspModelMesh mesh, Func<string, Source1MaterialInfo?> getMaterialInfo, Scratch scratch)
     {
         var bsp = context.Bsp;
         var nextIndex = bsp.Overlays.Count;
@@ -121,10 +122,12 @@ internal static class BspOverlayBuilder
 
             var material = entity.GetString("texture");
 
-            if (material.Length == 0 || getDecalSize(material) is not { } size)
+            if (material.Length == 0 || getMaterialInfo(material) is not { } info)
             {
                 continue;
             }
+
+            var size = info.TextureSize * info.DecalScale;
 
             var origin = entity.Origin;
             BspMaterialMesh? target = null;

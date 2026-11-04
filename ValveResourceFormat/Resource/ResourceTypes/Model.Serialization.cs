@@ -56,7 +56,6 @@ namespace ValveResourceFormat.ResourceTypes
                 // The renderer caches mesh buffers by this name, so it carries the model name like a read embedded mesh does
                 var mesh = new Mesh(BlockType.MDAT) { Resource = resource, Name = $"{name}:{source.Name}" };
                 mesh.Data = Mesh.CreateData(source);
-                mesh.ReadAttachmentsAndHitboxSets();
 
                 var buffers = new MBUF { Resource = resource };
                 buffers.VertexBuffers.AddRange(source.Buffers.VertexBuffers);
@@ -100,19 +99,6 @@ namespace ValveResourceFormat.ResourceTypes
 
             Mesh.ReadHitboxSets(model.Data, model.HitboxSets);
             Mesh.ReadAttachments(model.Data, model.Attachments);
-
-            if (modelMeshes.Count > 0)
-            {
-                if (model.HitboxSets.Count == 0)
-                {
-                    model.HitboxSets = modelMeshes[0].Mesh.HitboxSets;
-                }
-
-                if (model.Attachments.Count == 0)
-                {
-                    model.Attachments = modelMeshes[0].Mesh.Attachments;
-                }
-            }
 
             return resource;
         }

@@ -197,10 +197,8 @@ namespace CLI
                 return game?.FileSystem.OpenFile(name);
             }
 
-            bool MaterialExists(string name) => game?.FileSystem.Exists(name) ?? false;
-
             var source = Source1Model.Load(gamePath, OpenFile);
-            var model = Source1ModelConverter.Convert(source, gamePath, MaterialExists);
+            var model = Source1ModelConverter.Convert(source, gamePath, game?.FileSystem);
 
             using var resource = model.Resource;
             resource.FileName = path;

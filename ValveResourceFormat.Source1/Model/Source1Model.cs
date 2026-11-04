@@ -146,6 +146,9 @@ internal sealed class Source1Mesh
 
     /// <summary>The flexes that move vertices of the mesh.</summary>
     public Source1Flex[] Flexes { get; init; } = [];
+
+    /// <summary>The eyeball the mesh draws, or <see langword="null"/> when it is not an eyeball.</summary>
+    public Source1Eyeball? Eyeball { get; init; }
 }
 
 /// <summary>A flex controller, an input of the flex rules.</summary>
@@ -168,6 +171,21 @@ internal sealed record Source1FlexRule(int FlexDesc, Source1FlexOp[] Ops);
 /// <param name="LowererFlexDesc">The flex descriptor of the lowered lid.</param>
 /// <param name="Heights">Height of the lid on the eyeball when raised (X), neutral (Y) and lowered (Z).</param>
 internal sealed record Source1Eyelid(int FlexDesc, float EyeballRadius, int RaiserFlexDesc, int NeutralFlexDesc, int LowererFlexDesc, Vector3 Heights);
+
+/// <summary>An eyeball of a sub-model. The vectors are in the space of the bone.</summary>
+/// <param name="Bone">The bone the eyeball is attached to.</param>
+/// <param name="Origin">The center of the eyeball.</param>
+/// <param name="Up">The up direction of the eyeball.</param>
+/// <param name="Forward">The direction the eyeball looks in at rest.</param>
+/// <param name="ZOffset">How far the eyeball looks to the side of its target.</param>
+/// <param name="IrisScale">The size of the iris texture relative to the eyeball.</param>
+internal readonly record struct Source1Eyeball(int Bone, Vector3 Origin, Vector3 Up, Vector3 Forward, float ZOffset, float IrisScale);
+
+/// <summary>The mouth that lights the teeth. The forward vector is in the space of the bone.</summary>
+/// <param name="Bone">The bone the mouth is attached to.</param>
+/// <param name="Forward">The direction the mouth faces.</param>
+/// <param name="FlexDesc">The flex descriptor whose weight is how much the mouth is open.</param>
+internal readonly record struct Source1Mouth(int Bone, Vector3 Forward, int FlexDesc);
 
 /// <summary>How a flex moves one vertex of a mesh.</summary>
 /// <param name="Index">Mesh vertex id, see <see cref="Source1Mesh.OutputByOriginalVertexId"/>.</param>
@@ -238,6 +256,9 @@ internal sealed partial class Source1Model
     // Size of a vertex in the VVD file, which the vertex index of an MDL model is a byte offset in
     private const int StudioVertexSize = 48;
 
+    // The material type of a mesh that draws an eyeball
+    private const int EyeballMaterialType = 1;
+
     /// <summary>MDL version.</summary>
     public int Version { get; private set; }
 
@@ -306,6 +327,9 @@ internal sealed partial class Source1Model
 
     /// <summary>Eyelids whose flex descriptors follow the eyeballs, set after the flex rules run.</summary>
     public Source1Eyelid[] Eyelids { get; private set; } = [];
+
+    /// <summary>The mouth that lights the teeth, or <see langword="null"/> when the model has none.</summary>
+    public Source1Mouth? Mouth { get; private set; }
 
     /// <summary>Number of LODs that are drawn on screen, 0 when there is no geometry.</summary>
     public int NumLods { get; private set; }
@@ -489,6 +513,7 @@ internal sealed partial class Source1Model
         FlexControllers = mdl.FlexControllers;
         FlexRules = mdl.FlexRules;
         Eyelids = [.. mdl.Eyelids];
+        Mouth = mdl.Mouth;
 
         Bones = new Source1Bone[mdl.Bones.Length];
 
@@ -592,7 +617,8 @@ internal sealed partial class Source1Model
                     {
                         var meshVertexBase = modelVertexBase + mdlMeshes[meshIndex].VertexOffset;
                         var flexes = mdl.MeshFlexes[partIndex][modelIndex][meshIndex];
-                        var mesh = BuildMesh(mdl, vvd, vertexIndices, mdlMeshes[meshIndex], vtxMeshes[meshIndex], lod, meshVertexBase, stripGroupCountByLod[lod], flexes);
+                        var eyeball = GetEyeball(mdlMeshes[meshIndex], mdl.Eyeballs[partIndex][modelIndex]);
+                        var mesh = BuildMesh(mdl, vvd, vertexIndices, mdlMeshes[meshIndex], vtxMeshes[meshIndex], lod, meshVertexBase, stripGroupCountByLod[lod], flexes, eyeball);
 
                         if (mesh != null)
                         {
@@ -617,7 +643,18 @@ internal sealed partial class Source1Model
         }
     }
 
-    private static Source1Mesh? BuildMesh(MdlFile mdl, VvdFile vvd, int[]? vertexIndices, MdlFile.StudioMesh mdlMesh, VtxFile.MeshData data, int lod, int meshVertexBase, int firstStripGroup, Source1Flex[] flexes)
+    // A mesh of the eyeball material type draws the eyeball its material parameter names
+    private static Source1Eyeball? GetEyeball(MdlFile.StudioMesh mdlMesh, Source1Eyeball[] eyeballs)
+    {
+        if (mdlMesh.MaterialType != EyeballMaterialType || (uint)mdlMesh.MaterialParam >= (uint)eyeballs.Length)
+        {
+            return null;
+        }
+
+        return eyeballs[mdlMesh.MaterialParam];
+    }
+
+    private static Source1Mesh? BuildMesh(MdlFile mdl, VvdFile vvd, int[]? vertexIndices, MdlFile.StudioMesh mdlMesh, VtxFile.MeshData data, int lod, int meshVertexBase, int firstStripGroup, Source1Flex[] flexes, Source1Eyeball? eyeball)
     {
         if (mdlMesh.NumVertices == 0 || data.Indices.Length < 3)
         {
@@ -703,6 +740,7 @@ internal sealed partial class Source1Model
             StripGroupVertexIds = data.StripGroupVertexIds,
             FirstStripGroup = firstStripGroup,
             Flexes = flexes,
+            Eyeball = eyeball,
         };
     }
 

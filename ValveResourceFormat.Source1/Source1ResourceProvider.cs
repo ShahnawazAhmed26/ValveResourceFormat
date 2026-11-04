@@ -23,12 +23,13 @@ internal sealed class Source1ResourceProvider(Source1FileSystem fileSystem, ILog
 {
     private const string MaterialExtension = ".vmt";
     private const string ModelExtension = ".mdl";
-    private const string TextureExtension = ".vtf";
-    private const string HdrTextureExtension = ".hdr.vtf";
     private const string ParticleFolder = "particles/";
     private const string ParticleExtension = ".vpcf";
     private const string Source2ModelExtension = ".vmdl";
     private const string Source2MaterialExtension = ".vmat";
+
+    // The model of the game that is drawn for a model that is missing
+    private const string GameErrorModelPath = "models/error.mdl";
 
     private readonly Source1ParticleLibrary particles = new(fileSystem, logger);
 
@@ -66,8 +67,6 @@ internal sealed class Source1ResourceProvider(Source1FileSystem fileSystem, ILog
     /// <returns>The converted map.</returns>
     public Source1ConvertedMap LoadMap(BspFile bsp)
     {
-        ArgumentNullException.ThrowIfNull(bsp);
-
 #pragma warning disable CA2000 // Disposed with the file system that owns the archive
         if (BspPakFileReader.Open(bsp) is { } pakFile)
 #pragma warning restore CA2000
@@ -81,12 +80,11 @@ internal sealed class Source1ResourceProvider(Source1FileSystem fileSystem, ILog
         HighDynamicRange = bsp.HasHdrLighting;
         particles.SetMap(bsp.Name);
 
-        var worldspawn = bsp.Entities.FirstOrDefault(static entity => entity.ClassName == "worldspawn");
-        var skyName = worldspawn?.GetString("skyname") ?? string.Empty;
+        var skyName = bsp.FindEntity("worldspawn")?.GetString("skyname") ?? string.Empty;
         var sky = Source1SkyConverter.Create(fileSystem, skyName, bsp.HasHdrLighting, logger);
         var locator = new Source1MapLighting(bsp);
 
-        map = Source1WorldConverter.Convert(bsp, path => LoadModel(path)?.Source, fileSystem.OpenFile, GetMaterialInfo, GetDecalSize, locator, sky);
+        map = Source1WorldConverter.Convert(bsp, path => LoadModel(path)?.Source, fileSystem.OpenFile, GetMaterialInfo, locator, sky);
 
         return map;
     }
@@ -103,8 +101,6 @@ internal sealed class Source1ResourceProvider(Source1FileSystem fileSystem, ILog
     /// <returns>The converted model, or <see langword="null"/> when the game has none of that name or it does not load.</returns>
     internal ConvertedModel? LoadModel(string path)
     {
-        ArgumentNullException.ThrowIfNull(path);
-
         lock (models)
         {
             if (models.TryGetValue(path, out var cached))
@@ -129,7 +125,7 @@ internal sealed class Source1ResourceProvider(Source1FileSystem fileSystem, ILog
         try
         {
             var source = Source1Model.Load(path, fileSystem.OpenFile);
-            var model = Source1ModelConverter.Convert(source, path, fileSystem.Exists);
+            var model = Source1ModelConverter.Convert(source, path, fileSystem);
 
             return new ConvertedModel(source, model);
         }
@@ -140,31 +136,7 @@ internal sealed class Source1ResourceProvider(Source1FileSystem fileSystem, ILog
         }
     }
 
-    /// <summary>Gets the world size of an <c>infodecal</c> material.</summary>
-    /// <param name="name">The name of the material.</param>
-    /// <returns>The size, or <see langword="null"/> when the material or its texture is unknown.</returns>
-    public Vector2? GetDecalSize(string name)
-    {
-        try
-        {
-            var vmt = VmtFile.Load(Source1Paths.ToMaterialPath(name), fileSystem.OpenFile);
-
-            if (Source1TextureHeaders.TryReadBaseTexture(fileSystem, vmt) is not { } header)
-            {
-                return null;
-            }
-
-            var scale = vmt.Values.Float("$decalscale", 1f);
-
-            return new Vector2(header.Width, header.Height) * scale;
-        }
-        catch (Exception e) when (e is InvalidDataException or IOException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>Reads what the sprites and ropes drawn with a material need to know about it.</summary>
+    /// <summary>Reads what the sprites, ropes and decals drawn with a material need to know about it.</summary>
     /// <param name="name">The name of the material.</param>
     /// <returns>The info, or <see langword="null"/> when the material or its base texture is unknown.</returns>
     internal Source1MaterialInfo? GetMaterialInfo(string name)
@@ -181,7 +153,11 @@ internal sealed class Source1ResourceProvider(Source1FileSystem fileSystem, ILog
             var size = new Vector2(header.Width, header.Height);
             var origin = vmt.Values.Pair("$spriteorigin", new Vector2(0.5f));
 
-            return new Source1MaterialInfo(size, vmt.Values.String("$spriteorientation"), origin);
+            var decalScale = vmt.Values.Float("$decalscale", 1f);
+
+            var surfaceProperty = vmt.Values.String("$surfaceprop");
+
+            return new Source1MaterialInfo(size, vmt.Values.String("$spriteorientation"), origin, decalScale, surfaceProperty);
         }
         catch (Exception e) when (e is InvalidDataException or IOException)
         {
@@ -197,8 +173,6 @@ internal sealed class Source1ResourceProvider(Source1FileSystem fileSystem, ILog
     /// <returns>The path, such as <c>particles/teleporter_blue.vpcf</c>.</returns>
     internal static string GetParticlePath(string name)
     {
-        ArgumentNullException.ThrowIfNull(name);
-
         return string.Concat(ParticleFolder, Uri.EscapeDataString(name), ParticleExtension);
     }
 
@@ -233,6 +207,11 @@ internal sealed class Source1ResourceProvider(Source1FileSystem fileSystem, ILog
     // the same name drawn as an editor icon
     private static string GetGamePath(string path)
     {
+        if (path == Source1Paths.ErrorModelPath)
+        {
+            return GameErrorModelPath;
+        }
+
         if (path.EndsWith(Source2ModelExtension, StringComparison.Ordinal))
         {
             return string.Concat(path.AsSpan(0, path.Length - Source2ModelExtension.Length), ModelExtension);
@@ -263,7 +242,7 @@ internal sealed class Source1ResourceProvider(Source1FileSystem fileSystem, ILog
             return fileSystem.Exists(Source1Paths.RemoveVariant(path, out _));
         }
 
-        if (path.EndsWith(ModelExtension, StringComparison.Ordinal) || path.EndsWith(TextureExtension, StringComparison.Ordinal))
+        if (path.EndsWith(ModelExtension, StringComparison.Ordinal) || path.EndsWith(Source1Paths.TextureExtension, StringComparison.Ordinal))
         {
             return fileSystem.Exists(path);
         }
@@ -304,7 +283,7 @@ internal sealed class Source1ResourceProvider(Source1FileSystem fileSystem, ILog
         {
             resource = CreateBlackTexture();
         }
-        else if (path.EndsWith(TextureExtension, StringComparison.Ordinal))
+        else if (path.EndsWith(Source1Paths.TextureExtension, StringComparison.Ordinal))
         {
             resource = LoadTextureFrame(path);
         }
@@ -387,9 +366,9 @@ internal sealed class Source1ResourceProvider(Source1FileSystem fileSystem, ILog
     private string ResolveTexturePath(string path)
     {
         // A high dynamic range variant of a texture is optional
-        if (path.EndsWith(HdrTextureExtension, StringComparison.Ordinal) && !fileSystem.Exists(path))
+        if (path.EndsWith(Source1Paths.HdrTextureExtension, StringComparison.Ordinal) && !fileSystem.Exists(path))
         {
-            return string.Concat(path.AsSpan(0, path.Length - HdrTextureExtension.Length), TextureExtension);
+            return string.Concat(path.AsSpan(0, path.Length - Source1Paths.HdrTextureExtension.Length), Source1Paths.TextureExtension);
         }
 
         return path;
@@ -417,6 +396,16 @@ internal sealed class Source1ResourceProvider(Source1FileSystem fileSystem, ILog
         if (source?.DataBlock is not ResourceTypes.Material material)
         {
             return null;
+        }
+
+        if (Source1ModelMaterials.TryParseEyeball(variant, out var eyeball))
+        {
+            return Source1MaterialConverter.AsEyeball(material, eyeball);
+        }
+
+        if (Source1ModelMaterials.TryParseMouth(variant, out var mouthBone, out var mouthForward))
+        {
+            return Source1MaterialConverter.AsTeeth(material, mouthBone, mouthForward);
         }
 
         if (variant == OverlayVariant)
@@ -471,6 +460,14 @@ internal sealed class Source1ResourceProvider(Source1FileSystem fileSystem, ILog
     {
         try
         {
+            // A tools material is loaded as the material it is, so that its faces are shown with the label of what they compile to
+            var vmt = VmtFile.Load(path, fileSystem.OpenFile);
+
+            if (Source1MaterialConverter.IsToolsMaterial(vmt))
+            {
+                return LoadMaterial(path);
+            }
+
             return Source1MaterialConverter.ConvertToolSprite(path, fileSystem);
         }
         catch (Exception e) when (e is InvalidDataException or IOException)

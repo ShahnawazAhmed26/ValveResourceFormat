@@ -12,10 +12,20 @@ out vec4 vTangentOut;
 out vec2 vTexCoordOut;
 out vec2 vBumpTexCoordOut;
 out vec2 vEnvMapMaskTexCoordOut;
-out vec2 vRawTexCoordOut;
+out vec2 vBlendMaskTexCoordOut;
 out vec2 vLightmapUVOut;
 out vec4 vVertexColorOut;
 out float vBlendOut;
+
+// $blendmasktransform
+uniform vec4 g_vBlendMaskTransformRow0 = vec4(1.0, 0.0, 0.0, 0.0);
+uniform vec4 g_vBlendMaskTransformRow1 = vec4(0.0, 1.0, 0.0, 0.0);
+
+vec2 GetSource1BlendMaskTexCoord(vec2 texCoord)
+{
+    vec4 position = vec4(texCoord, 0.0, 1.0);
+    return vec2(dot(g_vBlendMaskTransformRow0, position), dot(g_vBlendMaskTransformRow1, position));
+}
 
 void main()
 {
@@ -29,7 +39,7 @@ void main()
     vTexCoordOut = GetSource1BaseTexCoord(vTEXCOORD);
     vBumpTexCoordOut = GetSource1BumpTexCoord(vTEXCOORD);
     vEnvMapMaskTexCoordOut = GetSource1EnvMapMaskTexCoord(vTEXCOORD);
-    vRawTexCoordOut = vTEXCOORD;
+    vBlendMaskTexCoordOut = GetSource1BlendMaskTexCoord(vTEXCOORD);
     vLightmapUVOut = vLightmapUV;
 
     // The vertex alpha is the opacity only with the vertex color, and the blend factor when the surface blends

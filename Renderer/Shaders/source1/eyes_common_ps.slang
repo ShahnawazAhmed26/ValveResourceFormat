@@ -5,19 +5,20 @@
 
 #include "common_ps.slang"
 #include "common_model_lighting_ps.slang"
+#include "common_rendermodes_lighting_ps.slang"
 
 #define SOURCE1_EYE_MAX_LIGHTS 4
 
 // Center of the eyeball in world space
-uniform vec3 g_vEyeOrigin;
+flat in vec3 vEyeOrigin;
 // Planar projection of the iris texture, as the dot product of these with the world position and 1
-uniform vec4 g_vIrisProjectionU;
-uniform vec4 g_vIrisProjectionV;
+flat in vec4 vIrisProjectionU;
+flat in vec4 vIrisProjectionV;
 
 vec2 GetSource1IrisCoords(vec3 position)
 {
     vec4 position4 = vec4(position, 1.0);
-    return vec2(dot(g_vIrisProjectionU, position4), dot(g_vIrisProjectionV, position4));
+    return vec2(dot(vIrisProjectionU, position4), dot(vIrisProjectionV, position4));
 }
 
 // The sun and the nearest local lights, as the direction to the light and its color with the falloff applied

@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using ValveKeyValue;
+using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes.ModelData;
 
 namespace ValveResourceFormat.Source1.Model;
@@ -23,7 +24,7 @@ internal sealed class Source1AnimationBaker
     private readonly Dictionary<string, int> nameIndices = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> sequenceNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Source1Animation, int> firstSegments = [];
-    private readonly Dictionary<string, int> boneMaskIndices = [];
+    private readonly List<float[]> boneMaskWeights = [];
     private readonly KVObject animations = KVObject.Array();
     private readonly KVObject segments = KVObject.Array();
     private readonly KVObject sequences = KVObject.Array();
@@ -39,8 +40,6 @@ internal sealed class Source1AnimationBaker
     /// <returns>The animation data, or <see langword="null"/> when the model has no sequence that can be played.</returns>
     public static ModelAnimationSource? Bake(Source1Model source)
     {
-        ArgumentNullException.ThrowIfNull(source);
-
         return new Source1AnimationBaker(source).Bake();
     }
 
@@ -142,7 +141,7 @@ internal sealed class Source1AnimationBaker
 
         var flags = KVObject.Collection();
         flags.Add("m_bLooping", sequence.IsLooping);
-        flags.Add("m_bHidden", blendIndex > 0 || sequence.Blends.Length > 1);
+        flags.Add("m_bHidden", sequence.Blends.Length > 1);
         flags.Add("m_bDelta", animation.IsDelta);
 
         var movements = KVObject.Array();
@@ -408,32 +407,25 @@ internal sealed class Source1AnimationBaker
     private int GetBoneMaskIndex(Source1Sequence sequence)
     {
         var weights = sequence.BoneWeights;
-        var drivesEveryBone = true;
-        var drivesAnyBone = false;
 
-        foreach (var weight in weights)
-        {
-            drivesEveryBone &= weight == 1f;
-            drivesAnyBone |= weight > 0f;
-        }
-
-        if (drivesEveryBone || !drivesAnyBone)
+        if (Array.TrueForAll(weights, static weight => weight == 1f) || !Array.Exists(weights, static weight => weight > 0f))
         {
             return 0;
         }
 
-        var key = string.Join(',', Array.ConvertAll(weights, static weight => weight.ToString("R", CultureInfo.InvariantCulture)));
-
-        if (boneMaskIndices.TryGetValue(key, out var index))
+        // The mask at index zero is not in the list
+        for (var i = 0; i < boneMaskWeights.Count; i++)
         {
-            return index;
+            if (boneMaskWeights[i].AsSpan().SequenceEqual(weights))
+            {
+                return i + 1;
+            }
         }
 
-        index = boneMasks.Count;
-        boneMaskIndices[key] = index;
+        boneMaskWeights.Add(weights);
         boneMasks.Add(CreateBoneMask(sequence.Name, weights));
 
-        return index;
+        return boneMasks.Count - 1;
     }
 
     private static KVObject CreateBoneMask(string name, float[] weights)
@@ -466,8 +458,8 @@ internal sealed class Source1AnimationBaker
         data.Add("v0", movement.StartVelocity);
         data.Add("v1", movement.EndVelocity);
         data.Add("angle", movement.Angle);
-        data.Add("vector", Source1ModelConverter.ToArray(movement.Vector));
-        data.Add("position", Source1ModelConverter.ToArray(movement.Position));
+        data.Add("vector", KVHelpers.ToKVArray(movement.Vector));
+        data.Add("position", KVHelpers.ToKVArray(movement.Position));
 
         return data;
     }

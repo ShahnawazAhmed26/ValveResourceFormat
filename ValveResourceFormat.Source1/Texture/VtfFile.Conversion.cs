@@ -7,8 +7,10 @@ namespace ValveResourceFormat.Source1.Texture;
 
 internal sealed partial class VtfFile
 {
-    public bool IsHighDynamicRange => Format is VtfFormat.RGBA16161616F or VtfFormat.RGB323232F
-        or VtfFormat.RGBA32323232F or VtfFormat.R32F;
+    public bool IsHighDynamicRange => IsHighDynamicRangeFormat(Format);
+
+    public static bool IsHighDynamicRangeFormat(VtfFormat format) => format is VtfFormat.RGBA16161616F
+        or VtfFormat.RGB323232F or VtfFormat.RGBA32323232F or VtfFormat.R32F;
 
     public SKBitmap DecodeMip(int mip = 0, int frame = 0, int face = 0, int slice = 0)
     {

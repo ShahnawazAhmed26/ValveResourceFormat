@@ -3,6 +3,7 @@
 #include "unlitgeneric_features.slang"
 #include "common_ps.slang"
 #include "common_envmap_ps.slang"
+#include "common_rendermodes_surface_ps.slang"
 
 in vec3 vFragPosition;
 in vec2 vTexCoordOut;
@@ -63,6 +64,18 @@ void main()
         color += mix(grey, environment, g_flEnvMapSaturation);
     }
 
+    ApplyFog(color, vFragPosition);
+
     float alpha = F_TRANSLUCENT != 0 ? normalTexel.a : 1.0;
     outputColor = vec4(color, alpha);
+
+    if (g_iRenderMode != 0)
+    {
+        vec3 tangent = GetSource1TangentFrame(geometricNormal, vec4(0.0), vFragPosition, vTexCoordOut)[0];
+        vec3 bumpMap = normalTexel.xyz * 2.0 - 1.0;
+
+        ApplySource1RenderModes(outputColor, g_vRefractTint, vec4(1.0), normal, eyeDirection, g_tNormal, vTexCoordOut);
+        ApplySource1NormalRenderModes(outputColor, geometricNormal, tangent, bumpMap, normal);
+        ApplySource1CubemapRenderMode(outputColor, normal, vFragPosition);
+    }
 }

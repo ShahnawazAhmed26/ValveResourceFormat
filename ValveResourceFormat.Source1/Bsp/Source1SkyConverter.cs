@@ -14,7 +14,8 @@ namespace ValveResourceFormat.Source1.Bsp;
 /// <param name="Material">The sky material.</param>
 /// <param name="TexturePath">The path of the cube texture, without the <c>_c</c> suffix.</param>
 /// <param name="Texture">The cube texture.</param>
-internal sealed record Source1Sky(string MaterialPath, Resource Material, string TexturePath, Resource Texture);
+/// <param name="Tint">The linear color the sky is multiplied with, the <c>$color</c> of its materials.</param>
+internal sealed record Source1Sky(string MaterialPath, Resource Material, string TexturePath, Resource Texture, Vector3 Tint);
 
 /// <summary>
 /// Builds the 2D sky of a Source 1 map from the six <c>materials/skybox/</c> textures of its <c>skyname</c> as a cube texture.
@@ -26,7 +27,9 @@ internal static class Source1SkyConverter
 
     private readonly record struct SkyFace(string Suffix, Vector3 Forward, Vector3 Right, Vector3 Up);
 
-    private readonly record struct SkyTexture(string? Path, string? CompressedHdrPath, Matrix4x4 Transform);
+    private readonly record struct SkyTexture(string? Path, string? HdrPath, Matrix4x4 Transform, Vector3 Color);
+
+    private readonly record struct SkyImage(int Width, int Height, Vector4[] Texels);
 
     private static readonly SkyFace[] SkyFaces =
     [
@@ -42,11 +45,11 @@ internal static class Source1SkyConverter
     /// <param name="fileSystem">Where the sky textures are read from.</param>
     /// <param name="skyName">The sky name, such as <c>sky_day01_01</c>.</param>
     /// <param name="highDynamicRange">
-    /// Whether to use the <c>$hdrcompressedtexture</c> of the faces, as the engine does for a map with HDR lighting.
-    /// The low dynamic range faces are used when a face has none.
+    /// Whether to use the <c>$hdrcompressedtexture</c> or floating point <c>$hdrbasetexture</c> of the faces, as the
+    /// engine does for a map with HDR lighting. The low dynamic range faces are used when a face has none.
     /// </param>
     /// <param name="logger">Receives why a sky could not be made.</param>
-    /// <returns>The sky, or null when a face is missing or is high dynamic range.</returns>
+    /// <returns>The sky, or null when a face is missing.</returns>
     public static Source1Sky? Create(Source1FileSystem fileSystem, string skyName, bool highDynamicRange, ILogger logger)
     {
         if (skyName.Length == 0)
@@ -55,6 +58,8 @@ internal static class Source1SkyConverter
         }
 
         var skyTextures = new SkyTexture[SkyFaces.Length];
+        var allHaveHdr = true;
+        var allHaveLdr = true;
 
         for (var i = 0; i < SkyFaces.Length; i++)
         {
@@ -65,10 +70,14 @@ internal static class Source1SkyConverter
             }
 
             skyTextures[i] = skyTexture;
-            highDynamicRange &= skyTexture.CompressedHdrPath != null;
+            allHaveHdr &= skyTexture.HdrPath != null;
+            allHaveLdr &= skyTexture.Path != null;
         }
 
-        if (!highDynamicRange)
+        // A sky that only has high dynamic range faces is drawn with them even when the map is not
+        var useHdr = allHaveHdr && (highDynamicRange || !allHaveLdr);
+
+        if (!useHdr && !allHaveLdr)
         {
             for (var i = 0; i < SkyFaces.Length; i++)
             {
@@ -80,8 +89,18 @@ internal static class Source1SkyConverter
             }
         }
 
-        var bitmaps = new SKBitmap[SkyFaces.Length];
-        var transforms = new Matrix4x4[SkyFaces.Length];
+        var color = skyTextures[0].Color;
+
+        foreach (var skyTexture in skyTextures)
+        {
+            if (skyTexture.Color != color)
+            {
+                logger.LogWarning("Sky {Name} has faces with different $color, using the one of the first face", skyName);
+                break;
+            }
+        }
+
+        var images = new SkyImage[SkyFaces.Length];
 
         try
         {
@@ -89,7 +108,7 @@ internal static class Source1SkyConverter
 
             for (var i = 0; i < SkyFaces.Length; i++)
             {
-                var path = highDynamicRange ? skyTextures[i].CompressedHdrPath! : skyTextures[i].Path!;
+                var path = useHdr ? skyTextures[i].HdrPath! : skyTextures[i].Path!;
                 using var stream = fileSystem.OpenFile(path);
 
                 if (stream == null)
@@ -100,38 +119,32 @@ internal static class Source1SkyConverter
 
                 var vtf = new VtfFile(stream);
 
-                if (vtf.IsHighDynamicRange)
+                if (vtf.IsHighDynamicRange && !useHdr)
                 {
                     logger.LogWarning("Sky texture {Name}{Face} is high dynamic range", skyName, SkyFaces[i].Suffix);
                     return null;
                 }
 
-                bitmaps[i] = vtf.DecodeMip();
-                transforms[i] = skyTextures[i].Transform;
-                size = Math.Max(size, bitmaps[i].Width);
+                using var bitmap = vtf.DecodeMip();
+
+                images[i] = ReadImage(bitmap, vtf.IsHighDynamicRange, useHdr);
+                size = Math.Max(size, bitmap.Width);
             }
 
             var materialPath = $"materials/skybox/{skyName}.vmat";
             var texturePath = $"materials/skybox/{skyName}.vtex";
 
 #pragma warning disable CA2000 // The resources are owned by the converted map
-            var cube = CreateCube(size, bitmaps, transforms, highDynamicRange);
+            var cube = CreateCube(size, images, skyTextures, useHdr);
             var material = Source1MaterialConverter.CreateSkyMaterial(materialPath, texturePath);
 #pragma warning restore CA2000
 
-            return new Source1Sky(materialPath, material, texturePath, cube);
+            return new Source1Sky(materialPath, material, texturePath, cube, color);
         }
         catch (Exception e) when (e is InvalidDataException or IOException or UnexpectedMagicException)
         {
             logger.LogWarning("Failed to load sky {Name}: {Message}", skyName, e.Message);
             return null;
-        }
-        finally
-        {
-            foreach (var bitmap in bitmaps)
-            {
-                bitmap?.Dispose();
-            }
         }
     }
 
@@ -140,18 +153,27 @@ internal static class Source1SkyConverter
         try
         {
             var vmt = VmtFile.Load($"materials/skybox/{skyName}{suffix}.vmt", fileSystem.OpenFile);
-            var baseTexture = vmt.Values.String("$basetexture") ?? vmt.Values.String("$hdrbasetexture");
+            var baseTexture = vmt.Values.String("$basetexture");
+            var hdrBaseTexture = vmt.Values.String("$hdrbasetexture");
             var compressedHdrTexture = vmt.Values.String("$hdrcompressedtexture");
 
-            if (baseTexture == null && compressedHdrTexture == null)
+            // A floating point $hdrbasetexture is the high dynamic range texture of a face that has no compressed one
+            var isHdrBaseFloat = hdrBaseTexture != null && IsFloatTexture(fileSystem, Source1Paths.ToTexturePath(hdrBaseTexture));
+            var path = baseTexture ?? (isHdrBaseFloat ? null : hdrBaseTexture);
+            var hdrPath = compressedHdrTexture ?? (isHdrBaseFloat ? hdrBaseTexture : null);
+
+            if (path == null && hdrPath == null)
             {
                 return null;
             }
 
-            var basePath = baseTexture == null ? null : Source1Paths.ToTexturePath(baseTexture);
-            var compressedHdrPath = compressedHdrTexture == null ? null : Source1Paths.ToTexturePath(compressedHdrTexture);
+            var color = vmt.Values.Vector("$color", Vector3.One);
 
-            return new SkyTexture(basePath, compressedHdrPath, vmt.Values.Transform("$basetexturetransform"));
+            return new SkyTexture(
+                path == null ? null : Source1Paths.ToTexturePath(path),
+                hdrPath == null ? null : Source1Paths.ToTexturePath(hdrPath),
+                vmt.Values.Transform("$basetexturetransform"),
+                color);
         }
         catch (Exception e) when (e is InvalidDataException or IOException)
         {
@@ -159,22 +181,63 @@ internal static class Source1SkyConverter
         }
     }
 
-    private static Resource CreateCube(int size, SKBitmap[] bitmaps, Matrix4x4[] texCoordTransforms, bool compressedHdr)
+    private static bool IsFloatTexture(Source1FileSystem fileSystem, string texturePath)
+    {
+        var header = Source1TextureHeaders.TryRead(fileSystem, texturePath);
+
+        return header != null && VtfFile.IsHighDynamicRangeFormat(header.Value.HiResFormat);
+    }
+
+    // The texels of a face as the values the cube stores: a byte color as 0 to 1, a floating point color as it is
+    // and a compressed HDR color as the linear color it encodes
+    private static SkyImage ReadImage(SKBitmap bitmap, bool isFloat, bool isHdr)
+    {
+        var texels = new Vector4[bitmap.Width * bitmap.Height];
+
+        if (isFloat)
+        {
+            using var pixmap = bitmap.PeekPixels();
+            var floats = pixmap.GetPixelSpan<float>();
+
+            for (var i = 0; i < texels.Length; i++)
+            {
+                var offset = i * 4;
+
+                texels[i] = new Vector4(floats[offset], floats[offset + 1], floats[offset + 2], 1f);
+            }
+        }
+        else
+        {
+            var pixels = bitmap.Pixels;
+
+            for (var i = 0; i < texels.Length; i++)
+            {
+                var pixel = pixels[i];
+                var scale = isHdr ? pixel.Alpha / 255f * CompressedHdrScale / 255f : 1f / 255f;
+
+                texels[i] = new Vector4(pixel.Red * scale, pixel.Green * scale, pixel.Blue * scale, 1f);
+            }
+        }
+
+        return new SkyImage(bitmap.Width, bitmap.Height, texels);
+    }
+
+    private static Resource CreateCube(int size, SkyImage[] images, SkyTexture[] skyTextures, bool isHdr)
     {
         var faces = new ReadOnlyMemory<byte>[SkyFaces.Length];
 
         for (var glFace = 0; glFace < faces.Length; glFace++)
         {
-            var texels = ResampleCubeFace(glFace, size, bitmaps, texCoordTransforms);
-            faces[glFace] = compressedHdr ? ToHalfPixels(texels) : ToBytePixels(texels);
+            var texels = ResampleCubeFace(glFace, size, images, skyTextures);
+            faces[glFace] = isHdr ? ToHalfPixels(texels) : ToBytePixels(texels);
         }
 
-        var format = compressedHdr ? VTexFormat.RGBA16161616F : VTexFormat.RGBA8888;
+        var format = isHdr ? VTexFormat.RGBA16161616F : VTexFormat.RGBA8888;
 
         return VrfTexture.Create((ushort)size, (ushort)size, format, VTexFlags.CUBE_TEXTURE, Vector4.One, faces);
     }
 
-    private static byte[] ToBytePixels(SKColor[] texels)
+    private static byte[] ToBytePixels(Vector4[] texels)
     {
         var pixels = new byte[texels.Length * 4];
 
@@ -183,28 +246,27 @@ internal static class Source1SkyConverter
             var texel = texels[i];
             var offset = i * 4;
 
-            pixels[offset] = texel.Red;
-            pixels[offset + 1] = texel.Green;
-            pixels[offset + 2] = texel.Blue;
+            pixels[offset] = (byte)MathF.Round(texel.X * 255f);
+            pixels[offset + 1] = (byte)MathF.Round(texel.Y * 255f);
+            pixels[offset + 2] = (byte)MathF.Round(texel.Z * 255f);
             pixels[offset + 3] = 255;
         }
 
         return pixels;
     }
 
-    private static byte[] ToHalfPixels(SKColor[] texels)
+    private static byte[] ToHalfPixels(Vector4[] texels)
     {
         var pixels = new Half[texels.Length * 4];
 
         for (var i = 0; i < texels.Length; i++)
         {
             var texel = texels[i];
-            var scale = texel.Alpha / 255f * CompressedHdrScale / 255f;
             var offset = i * 4;
 
-            pixels[offset] = (Half)(texel.Red * scale);
-            pixels[offset + 1] = (Half)(texel.Green * scale);
-            pixels[offset + 2] = (Half)(texel.Blue * scale);
+            pixels[offset] = (Half)texel.X;
+            pixels[offset + 1] = (Half)texel.Y;
+            pixels[offset + 2] = (Half)texel.Z;
             pixels[offset + 3] = Half.One;
         }
 
@@ -212,15 +274,14 @@ internal static class Source1SkyConverter
     }
 
     // The texel of the sky faces that each texel of a cube face looks at
-    private static SKColor[] ResampleCubeFace(int glFace, int size, SKBitmap[] bitmaps, Matrix4x4[] texCoordTransforms)
+    private static Vector4[] ResampleCubeFace(int glFace, int size, SkyImage[] images, SkyTexture[] skyTextures)
     {
         // Every texel of a cube face looks furthest along the face's own axis, so one sky face fills all of it
         var faceIndex = FindSkyFace(GetCubeDirection(glFace, 0f, 0f));
         var face = SkyFaces[faceIndex];
-        var bitmap = bitmaps[faceIndex];
-        var sourcePixels = bitmap.Pixels;
-        var texCoordTransform = texCoordTransforms[faceIndex];
-        var texels = new SKColor[size * size];
+        var image = images[faceIndex];
+        var texCoordTransform = skyTextures[faceIndex].Transform;
+        var texels = new Vector4[size * size];
 
         for (var y = 0; y < size; y++)
         {
@@ -234,10 +295,10 @@ internal static class Source1SkyConverter
                 var s = Vector3.Dot(direction, face.Right) / forward;
                 var t = Vector3.Dot(direction, face.Up) / forward;
                 var texCoord = Vector2.Transform(new Vector2((s + 1f) * 0.5f, (1f - t) * 0.5f), texCoordTransform);
-                var sourceX = Math.Clamp((int)(texCoord.X * bitmap.Width), 0, bitmap.Width - 1);
-                var sourceY = Math.Clamp((int)(texCoord.Y * bitmap.Height), 0, bitmap.Height - 1);
+                var sourceX = Math.Clamp((int)(texCoord.X * image.Width), 0, image.Width - 1);
+                var sourceY = Math.Clamp((int)(texCoord.Y * image.Height), 0, image.Height - 1);
 
-                texels[(y * size) + x] = sourcePixels[(sourceY * bitmap.Width) + sourceX];
+                texels[(y * size) + x] = image.Texels[(sourceY * image.Width) + sourceX];
             }
         }
 

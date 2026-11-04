@@ -152,6 +152,17 @@ namespace ValveResourceFormat.Renderer.World
         /// <summary>Binds the scene's lightmap, light probe atlas, and barn light cookie textures to their reserved units.</summary>
         public void BindLightmapTextures()
         {
+            if (Lightmaps.Count == 0)
+            {
+                // Without baked light, a shader that always reads its lightmap gets full light instead of black
+                var whiteLightmap = scene.RendererContext.MaterialLoader.GetDefaultColor();
+
+                for (var slot = ReservedTextureSlots.Lightmap1; slot <= ReservedTextureSlots.Lightmap4; slot++)
+                {
+                    GL.BindTextureUnit((int)slot, whiteLightmap.Handle);
+                }
+            }
+
             foreach (var (name, texture) in Lightmaps)
             {
                 if (!MaterialLoader.ReservedTextureSlotByName.TryGetValue(name, out var lightmapSlot))

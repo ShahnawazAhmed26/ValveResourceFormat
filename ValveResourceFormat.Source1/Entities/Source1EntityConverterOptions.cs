@@ -1,3 +1,5 @@
+using ValveResourceFormat.Source1.Bsp;
+
 namespace ValveResourceFormat.Source1.Entities;
 
 /// <summary>
@@ -22,4 +24,42 @@ internal sealed class Source1EntityConverterOptions
     /// <c>_lightHDR</c>. Otherwise only the LDR keys are read.
     /// </summary>
     public bool HdrLighting { get; init; }
+
+    /// <summary>
+    /// Gets the light level at which a dynamic light has faded to nothing at its radius, which depends on the
+    /// version of the map.
+    /// </summary>
+    public float MinLightingValue { get; init; } = 1f / 256f;
+
+    private static float GetMinLightingValue(int bspVersion)
+        => bspVersion >= 20 ? 1f / 256f : 20f / 256f;
+
+    /// <summary>
+    /// Gets the origin of the first entity with each targetname, which is where a light with a <c>target</c>
+    /// key points.
+    /// </summary>
+    public IReadOnlyDictionary<string, Vector3> TargetOrigins { get; init; } = new Dictionary<string, Vector3>();
+
+    /// <summary>Creates the options for converting the entities of a map.</summary>
+    public static Source1EntityConverterOptions ForMap(BspFile bsp)
+    {
+        var targetOrigins = new Dictionary<string, Vector3>();
+
+        foreach (var entity in bsp.Entities)
+        {
+            var targetName = entity.TargetName;
+
+            if (targetName.Length > 0)
+            {
+                targetOrigins.TryAdd(targetName, entity.Origin);
+            }
+        }
+
+        return new Source1EntityConverterOptions
+        {
+            HdrLighting = bsp.HasHdrLighting,
+            MinLightingValue = GetMinLightingValue(bsp.Version),
+            TargetOrigins = targetOrigins,
+        };
+    }
 }

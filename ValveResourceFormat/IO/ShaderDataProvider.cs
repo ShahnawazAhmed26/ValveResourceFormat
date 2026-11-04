@@ -847,6 +847,12 @@ namespace ValveResourceFormat.IO
                 return CreateBlendState(RsBlendMode.DestColor, RsBlendMode.SrcColor);
             }
 
+            if (shaderName == Material.Source1ShaderPrefix + "modulate")
+            {
+                var isDouble = combos.GetValueOrDefault("F_MOD2X") == 1;
+                return CreateBlendState(RsBlendMode.DestColor, isDouble ? RsBlendMode.SrcColor : RsBlendMode.Zero);
+            }
+
             var blendModeParam = shaderName.EndsWith("static_overlay", StringComparison.Ordinal) || shaderName == "csgo_unlitgeneric"
                 ? combos.GetValueOrDefault("F_BLEND_MODE")
                 : 0;
@@ -890,6 +896,7 @@ namespace ValveResourceFormat.IO
                 "pbr" => combos.GetValueOrDefault("F_DISABLE_DEPTH_WRITE") == 0,
                 "csgo_complex" => combos.GetValueOrDefault("F_DISABLE_Z_BUFFERING") == 0 && combos.GetValueOrDefault("F_DEPTH_BIAS") == 0,
                 "generic" or "zipline" or "black_unlit" or "environment_texture_set" or "water_dota" or "crystal" => true,
+                Material.Source1ShaderPrefix + "modulate" => combos.GetValueOrDefault("F_WRITE_Z") == 1,
                 _ => false,
             };
         }

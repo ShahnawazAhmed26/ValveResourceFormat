@@ -122,7 +122,12 @@ internal sealed class Source1ParticleLibrary
             values.Boolean("$addoverblend"),
             values.Float("$overbrightfactor", 1f),
             values.Float("$addself"),
-            values.Boolean("$blendframes", true));
+            values.Boolean("$blendframes", true),
+            values.Boolean("$mod2x"),
+            values.Float("$minsize"),
+            values.Float("$maxsize", 20f),
+            values.Float("$startfadesize", 10f),
+            values.Float("$endfadesize", 20f));
     }
 
     private void EnsureLoaded()

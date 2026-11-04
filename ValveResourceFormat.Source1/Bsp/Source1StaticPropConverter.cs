@@ -3,6 +3,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using ValveKeyValue;
 using ValveResourceFormat.Blocks;
+using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Source1.Model;
 
@@ -31,16 +32,10 @@ internal sealed class Source1StaticPropConverter(
     {
         var prop = bsp.StaticProps.Props[propIndex];
         var source = loadModel(prop.ModelName);
-
-        if (source == null)
-        {
-            return;
-        }
-
         var sceneObjectIndex = sceneObjects.Count;
         sceneObjects.Add(CreateSceneObject(prop, source));
 
-        if ((prop.Flags & StaticPropFlags.NoPerVertexLighting) != 0)
+        if (source == null || (prop.Flags & StaticPropFlags.NoPerVertexLighting) != 0)
         {
             return;
         }
@@ -58,37 +53,37 @@ internal sealed class Source1StaticPropConverter(
     /// <param name="transform">The transform of the model.</param>
     public void AddDetailModel(string modelName, Matrix4x4 transform)
     {
-        if (loadModel(modelName) == null)
+        if (modelName.Length == 0)
         {
             return;
         }
 
+        var modelPath = loadModel(modelName) == null ? Source1Paths.ErrorModelPath : Source1Paths.Normalize(modelName);
+
         var sceneObject = KVObject.Collection();
-        sceneObject.Add("m_renderableModel", Source1Paths.Normalize(modelName));
-        sceneObject.Add("m_skin", "skin0");
+        sceneObject.Add("m_renderableModel", modelPath);
+        sceneObject.Add("m_skin", Source1ModelConverter.GetSkinName(0));
         sceneObject.Add("m_vTransform", Source1WorldConverter.ToColumns(transform));
         sceneObject.Add("m_nObjectTypeFlags", 0L);
-        sceneObject.Add("m_vTintColor", CreateTint(1f, 1f, 1f));
-        sceneObject.Add("m_vLightingOrigin", CreateVector(transform.Translation));
+        sceneObject.Add("m_vTintColor", KVHelpers.ToKVArray(Vector4.One));
+        sceneObject.Add("m_vLightingOrigin", KVHelpers.ToKVArray(transform.Translation));
         sceneObjects.Add(sceneObject);
     }
 
-    private static KVObject CreateTint(float red, float green, float blue)
-    {
-        var tint = KVObject.Array();
-        tint.Add(red);
-        tint.Add(green);
-        tint.Add(blue);
-        tint.Add(1f);
-
-        return tint;
-    }
-
-    private static KVObject CreateSceneObject(BspStaticProp prop, Source1Model source)
+    private static KVObject CreateSceneObject(BspStaticProp prop, Source1Model? source)
     {
         var scale = prop.Scale > 0f ? prop.Scale : 1f;
         var transform = Matrix4x4.CreateScale(scale) * EntityTransformHelper.ToRigidTransformationMatrix(prop.Angles, prop.Origin);
         var color = new Color32(prop.ColorModulation);
+        var modelPath = Source1Paths.ErrorModelPath;
+        var skin = Source1ModelConverter.GetSkinName(0);
+
+        if (source != null)
+        {
+            modelPath = Source1Paths.Normalize(prop.ModelName);
+            skin = Source1ModelConverter.GetSkinName(source, prop.Skin);
+        }
+
         var flags = 0L;
 
         if ((prop.Flags & StaticPropFlags.NoShadow) != 0)
@@ -97,11 +92,11 @@ internal sealed class Source1StaticPropConverter(
         }
 
         var sceneObject = KVObject.Collection();
-        sceneObject.Add("m_renderableModel", Source1Paths.Normalize(prop.ModelName));
-        sceneObject.Add("m_skin", GetSkinName(prop.Skin, source));
+        sceneObject.Add("m_renderableModel", modelPath);
+        sceneObject.Add("m_skin", skin);
         sceneObject.Add("m_vTransform", Source1WorldConverter.ToColumns(transform));
         sceneObject.Add("m_nObjectTypeFlags", flags);
-        sceneObject.Add("m_vTintColor", CreateTint(color.R / 255f, color.G / 255f, color.B / 255f));
+        sceneObject.Add("m_vTintColor", KVHelpers.ToKVArray(new Vector4(color.R / 255f, color.G / 255f, color.B / 255f, 1f)));
 
         if ((prop.Flags & StaticPropFlags.Fades) != 0)
         {
@@ -115,7 +110,7 @@ internal sealed class Source1StaticPropConverter(
         }
 
         var useLightingOrigin = (prop.Flags & StaticPropFlags.UseLightingOrigin) != 0;
-        sceneObject.Add("m_vLightingOrigin", CreateVector(useLightingOrigin ? prop.LightingOrigin : prop.Origin));
+        sceneObject.Add("m_vLightingOrigin", KVHelpers.ToKVArray(useLightingOrigin ? prop.LightingOrigin : prop.Origin));
 
         return sceneObject;
     }
@@ -134,24 +129,6 @@ internal sealed class Source1StaticPropConverter(
         }
 
         return (start, end);
-    }
-
-    private static KVObject CreateVector(Vector3 value)
-    {
-        var vector = KVObject.Array();
-        vector.Add(value.X);
-        vector.Add(value.Y);
-        vector.Add(value.Z);
-
-        return vector;
-    }
-
-    private static string GetSkinName(int skin, Source1Model source)
-    {
-        var skinCount = Math.Max(1, source.SkinFamilies.Length);
-        var index = (uint)skin < (uint)skinCount ? skin : 0;
-
-        return string.Create(CultureInfo.InvariantCulture, $"skin{index}");
     }
 
     private List<LodStream> LoadLodStreams(int propIndex, Source1Model source)

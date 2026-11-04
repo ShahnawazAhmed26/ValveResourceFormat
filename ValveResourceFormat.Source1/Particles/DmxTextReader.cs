@@ -181,6 +181,8 @@ internal sealed class DmxTextReader
         return type switch
         {
             "int" => ParseInt(value),
+            "uint8" => ParseByte(value),
+            "uint64" => ParseUInt64(value),
             "float" => ParseFloat(value),
             "bool" => value is "1" or "true",
             "string" => value,
@@ -200,6 +202,26 @@ internal sealed class DmxTextReader
         if (!int.TryParse(value, CultureInfo.InvariantCulture, out var result))
         {
             throw new InvalidDataException($"Invalid integer '{value}' in DMX text.");
+        }
+
+        return result;
+    }
+
+    private static byte ParseByte(string value)
+    {
+        if (!byte.TryParse(value, CultureInfo.InvariantCulture, out var result))
+        {
+            throw new InvalidDataException($"Invalid byte '{value}' in DMX text.");
+        }
+
+        return result;
+    }
+
+    private static ulong ParseUInt64(string value)
+    {
+        if (!ulong.TryParse(value, CultureInfo.InvariantCulture, out var result))
+        {
+            throw new InvalidDataException($"Invalid unsigned integer '{value}' in DMX text.");
         }
 
         return result;

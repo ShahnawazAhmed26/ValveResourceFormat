@@ -27,7 +27,7 @@ internal sealed class DmxElement
 
     /// <summary>
     /// The attribute values by name. A value is an <see cref="int"/>, <see cref="float"/>, <see cref="bool"/>,
-    /// <see cref="string"/>, <see cref="byte"/> array, <see cref="DmxTime"/>, <see cref="DmxColor"/>, vector, quaternion,
+    /// <see cref="byte"/>, <see cref="ulong"/> (text encoding only), <see cref="string"/>, <see cref="byte"/> array, <see cref="DmxTime"/>, <see cref="DmxColor"/>, vector, quaternion,
     /// <see cref="Matrix4x4"/>, <see cref="DmxElement"/>, <see cref="DmxExternalReference"/>, or a list of one of these.
     /// An element reference that points at nothing is <see langword="null"/>.
     /// </summary>
@@ -39,6 +39,8 @@ internal sealed class DmxElement
     {
         float value => value,
         int value => value,
+        byte value => value,
+        ulong value => value,
         bool value => value ? 1f : 0f,
         DmxTime value => value.Seconds,
         _ => defaultValue,
@@ -48,6 +50,8 @@ internal sealed class DmxElement
     {
         int value => value,
         float value => (int)value,
+        byte value => value,
+        ulong value => (int)value,
         bool value => value ? 1 : 0,
         _ => defaultValue,
     };

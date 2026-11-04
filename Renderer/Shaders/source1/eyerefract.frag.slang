@@ -53,11 +53,11 @@ float GetAverageAmbient()
 
 void main()
 {
-    vec3 normal = normalize(vFragPosition - g_vEyeOrigin);
+    vec3 normal = normalize(vFragPosition - vEyeOrigin);
 
     // The iris projection vectors point away from the up and left of the eye socket
-    vec3 socketUp = normalize(-g_vIrisProjectionV.xyz);
-    vec3 socketLeft = normalize(-g_vIrisProjectionU.xyz);
+    vec3 socketUp = normalize(-vIrisProjectionV.xyz);
+    vec3 socketLeft = normalize(-vIrisProjectionU.xyz);
 
     vec3 tangent = normalize(cross(socketUp, normal));
     vec3 binormal = normalize(cross(normal, tangent));
@@ -70,7 +70,7 @@ void main()
 
     if (F_RAYTRACE_SPHERE != 0)
     {
-        float distance = IntersectRaySphere(g_vCameraPositionWs, viewDirection, g_vEyeOrigin, g_flEyeballRadius);
+        float distance = IntersectRaySphere(g_vCameraPositionWs, viewDirection, vEyeOrigin, g_flEyeballRadius);
         position = g_vCameraPositionWs + viewDirection * distance;
 
         if (distance == 0.0)
@@ -80,7 +80,7 @@ void main()
                 discard;
             }
 
-            position = g_vEyeOrigin + normal * g_flEyeballRadius;
+            position = vEyeOrigin + normal * g_flEyeballRadius;
         }
     }
 

@@ -359,6 +359,14 @@ internal sealed partial class MdlFile
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    private struct StudioMouth
+    {
+        public int Bone;
+        public Vector3 Forward;
+        public int FlexDesc;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
     private struct LidFlexDescs
     {
         public int Raiser;

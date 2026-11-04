@@ -3,7 +3,10 @@ using System.IO;
 using System.Runtime.InteropServices;
 using ValveKeyValue;
 using ValveResourceFormat.Blocks;
+using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes.ModelData;
+using ValveResourceFormat.Source1.FileSystem;
+using ValveResourceFormat.Source1.Material;
 using S2Model = ValveResourceFormat.ResourceTypes.Model;
 
 namespace ValveResourceFormat.Source1.Model;
@@ -27,17 +30,24 @@ internal static class Source1ModelConverter
         public uint BoneWeights;
     }
 
+    private static readonly VertexField[] VertexFields =
+    [
+        new(nameof(ConvertedVertex.Position), "POSITION", 0, DXGI_FORMAT.R32G32B32_FLOAT),
+        new(nameof(ConvertedVertex.Normal), "NORMAL", 0, DXGI_FORMAT.R32G32B32_FLOAT),
+        new(nameof(ConvertedVertex.Tangent), "TANGENT", 0, DXGI_FORMAT.R32G32B32A32_FLOAT),
+        new(nameof(ConvertedVertex.TexCoord), "TEXCOORD", 0, DXGI_FORMAT.R32G32_FLOAT),
+        new(nameof(ConvertedVertex.BoneIndices), "BLENDINDICES", 0, DXGI_FORMAT.R8G8B8A8_UINT),
+        new(nameof(ConvertedVertex.BoneWeights), "BLENDWEIGHT", 0, DXGI_FORMAT.R8G8B8A8_UNORM),
+    ];
+
     /// <summary>Converts a model.</summary>
     /// <param name="source">The model to convert.</param>
     /// <param name="name">Name of the resulting model.</param>
-    /// <param name="materialExists">Tells whether a material path exists, to pick between the search paths of a material.</param>
-    public static S2Model Convert(Source1Model source, string name, Func<string, bool> materialExists)
+    /// <param name="fileSystem">The files of the game, to pick between the search paths of a material and to read its shader.</param>
+    public static S2Model Convert(Source1Model source, string name, Source1FileSystem? fileSystem)
     {
-        ArgumentNullException.ThrowIfNull(source);
-        ArgumentNullException.ThrowIfNull(materialExists);
-
         var bindToRest = GetBindToRest(source);
-        var materialPaths = ResolveMaterialPaths(source, materialExists);
+        var materialPaths = new ModelMaterialPaths(source, ResolveMaterialPaths(source, path => fileSystem?.Exists(path) ?? false), bindToRest, fileSystem);
         var flexConverter = new Source1FlexConverter(source);
         var meshGroupNames = new List<string>();
         var meshes = new List<ModelMeshSource>();
@@ -103,7 +113,7 @@ internal static class Source1ModelConverter
         Source1Mesh[] lodMeshes,
         ulong groupMask,
         Matrix4x4 bindToRest,
-        string[] materialPaths,
+        ModelMaterialPaths materialPaths,
         Source1FlexConverter flexConverter)
     {
         var vertices = new List<ConvertedVertex>();
@@ -115,7 +125,7 @@ internal static class Source1ModelConverter
         // The meshes of a level of detail share one vertex buffer and one index buffer, each drawn from its own range
         foreach (var sourceMesh in lodMeshes)
         {
-            var materialPath = GetMaterialPath(source, sourceMesh, 0, materialPaths);
+            var materialPath = materialPaths.Get(sourceMesh, 0);
             var drawCall = new MeshDrawCall(materialPath, vertices.Count, sourceMesh.Vertices.Length, indices.Count, sourceMesh.Indices.Length);
 
             drawCalls.Add(drawCall);
@@ -123,10 +133,16 @@ internal static class Source1ModelConverter
             vertices.AddRange(CreateVertices(sourceMesh, bindToRest));
             indices.AddRange(sourceMesh.Indices);
             boneCount = Math.Max(boneCount, GetBoneCount(source, sourceMesh));
+
+            // The shader of an eyeball skins the origin of the eye by its bone
+            if (sourceMesh.Eyeball is { } eyeball)
+            {
+                boneCount = Math.Max(boneCount, Math.Min(eyeball.Bone + 1, source.Bones.Length));
+            }
         }
 
         var vertexArray = vertices.ToArray();
-        var (min, max) = GetBounds(vertexArray);
+        var (min, max) = Source1VertexBuffers.GetBounds(vertexArray, vertex => vertex.Position);
 
         var restToBind = Matrix4x4.Invert(bindToRest, out var inverse) ? inverse : Matrix4x4.Identity;
         var meshBones = new List<MeshBone>(boneCount);
@@ -141,7 +157,9 @@ internal static class Source1ModelConverter
             boneRemap[i] = i;
         }
 
-        return new ModelMeshSource(name, CreateVbib(vertexArray, indices.ToArray()), drawCalls, min, max)
+        var buffers = Source1VertexBuffers.Create(vertexArray, VertexFields, indices.ToArray());
+
+        return new ModelMeshSource(name, buffers, drawCalls, min, max)
         {
             MeshGroupMask = groupMask,
             LodMask = 1L << lodMeshes[0].Lod,
@@ -295,20 +313,11 @@ internal static class Source1ModelConverter
                 continue;
             }
 
-            var boneName = KVObject.Array();
-            boneName.Add(source.Bones[sourceAttachment.BoneIndex].Name);
-
-            var rotation = KVObject.Array();
-            rotation.Add(ToArray(Quaternion.CreateFromRotationMatrix(sourceAttachment.Local)));
-
-            var offset = KVObject.Array();
-            offset.Add(ToArray(sourceAttachment.Local.Translation));
-
-            var weight = KVObject.Array();
-            weight.Add(1f);
-
-            var rootTransform = KVObject.Array();
-            rootTransform.Add(false);
+            var boneName = KVHelpers.MakeArray(source.Bones[sourceAttachment.BoneIndex].Name);
+            var rotation = KVHelpers.MakeArray(KVHelpers.ToKVArray(Quaternion.CreateFromRotationMatrix(sourceAttachment.Local)));
+            var offset = KVHelpers.MakeArray(KVHelpers.ToKVArray(sourceAttachment.Local.Translation));
+            var weight = KVHelpers.MakeArray(1f);
+            var rootTransform = KVHelpers.MakeArray(false);
 
             var attachment = KVObject.Collection();
             attachment.Add("m_name", sourceAttachment.Name);
@@ -353,8 +362,8 @@ internal static class Source1ModelConverter
                 hitbox.Add("m_name", sourceHitbox.Name);
                 hitbox.Add("m_sSurfaceProperty", bone.SurfaceProperty);
                 hitbox.Add("m_sBoneName", bone.Name);
-                hitbox.Add("m_vMinBounds", ToArray(sourceHitbox.Min));
-                hitbox.Add("m_vMaxBounds", ToArray(sourceHitbox.Max));
+                hitbox.Add("m_vMinBounds", KVHelpers.ToKVArray(sourceHitbox.Min));
+                hitbox.Add("m_vMaxBounds", KVHelpers.ToKVArray(sourceHitbox.Max));
                 hitbox.Add("m_flShapeRadius", 0f);
                 hitbox.Add("m_nGroupId", sourceHitbox.Group);
                 hitbox.Add("m_nShapeType", (int)Hitbox.HitboxShape.Box);
@@ -404,14 +413,14 @@ internal static class Source1ModelConverter
         return bones;
     }
 
-    private static List<ModelMaterialGroup> CreateMaterialGroups(Source1Model source, List<Source1Mesh> meshes, string[] materialPaths)
+    private static List<ModelMaterialGroup> CreateMaterialGroups(Source1Model source, List<Source1Mesh> meshes, ModelMaterialPaths materialPaths)
     {
         var defaultMaterials = new List<string>();
         var firstMeshOfMaterial = new Dictionary<string, Source1Mesh>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var mesh in meshes)
         {
-            var path = GetMaterialPath(source, mesh, 0, materialPaths);
+            var path = materialPaths.Get(mesh, 0);
 
             if (firstMeshOfMaterial.TryAdd(path, mesh))
             {
@@ -429,45 +438,96 @@ internal static class Source1ModelConverter
             foreach (var defaultMaterial in defaultMaterials)
             {
                 var mesh = firstMeshOfMaterial[defaultMaterial];
-                materials.Add(GetMaterialPath(source, mesh, skin, materialPaths));
+                materials.Add(materialPaths.Get(mesh, skin));
             }
 
-            var name = string.Create(CultureInfo.InvariantCulture, $"skin{skin}");
-            groups.Add(new ModelMaterialGroup(name, materials));
+            groups.Add(new ModelMaterialGroup(GetSkinName(skin), materials));
         }
 
         return groups;
     }
 
-    private static string GetMaterialPath(Source1Model source, Source1Mesh mesh, int skin, string[] materialPaths)
+    // The path of the material of a mesh. The material of an eyeball or of teeth is a variant, which carries what the
+    // model knows about the eyeball or the mouth to its shader.
+    private sealed class ModelMaterialPaths(Source1Model source, string[] paths, Matrix4x4 bindToRest, Source1FileSystem? fileSystem)
     {
-        var index = GetMaterialIndex(source, mesh, skin);
+        private readonly Dictionary<string, bool> isTeeth = new(StringComparer.OrdinalIgnoreCase);
 
-        if ((uint)index < (uint)materialPaths.Length)
+        public string Get(Source1Mesh mesh, int skin)
         {
-            return materialPaths[index];
+            var index = GetMaterialIndex(source, mesh, skin);
+
+            if ((uint)index >= (uint)paths.Length)
+            {
+                return string.Empty;
+            }
+
+            var path = paths[index];
+
+            if (mesh.Eyeball is { } eyeball && (uint)eyeball.Bone < (uint)source.Bones.Length)
+            {
+                return Source1Paths.AddVariant(path, Source1ModelMaterials.GetEyeballVariant(ToBindSpace(eyeball)));
+            }
+
+            if (source.Mouth is { } mouth && (uint)mouth.Bone < (uint)source.Bones.Length && IsTeeth(path))
+            {
+                return Source1Paths.AddVariant(path, Source1ModelMaterials.GetMouthVariant(mouth with { Forward = ToBindDirection(mouth.Bone, mouth.Forward) }));
+            }
+
+            return path;
         }
 
-        return string.Empty;
-    }
-
-    private static (Vector3 Min, Vector3 Max) GetBounds(ConvertedVertex[] vertices)
-    {
-        if (vertices.Length == 0)
+        private Source1Eyeball ToBindSpace(Source1Eyeball eyeball)
         {
-            return (Vector3.Zero, Vector3.Zero);
+            var bind = GetBoneToBind(eyeball.Bone);
+
+            return eyeball with
+            {
+                Origin = Vector3.Transform(eyeball.Origin, bind),
+                Up = Vector3.Normalize(Vector3.TransformNormal(eyeball.Up, bind)),
+                Forward = Vector3.Normalize(Vector3.TransformNormal(eyeball.Forward, bind)),
+            };
         }
 
-        var min = vertices[0].Position;
-        var max = min;
-
-        foreach (var vertex in vertices)
+        private Vector3 ToBindDirection(int bone, Vector3 direction)
         {
-            min = Vector3.Min(min, vertex.Position);
-            max = Vector3.Max(max, vertex.Position);
+            return Vector3.Normalize(Vector3.TransformNormal(direction, GetBoneToBind(bone)));
         }
 
-        return (min, max);
+        // Takes a position in the space of a bone to the space the converted vertices are in
+        private Matrix4x4 GetBoneToBind(int bone)
+        {
+            var boneToPose = Matrix4x4.Invert(source.Bones[bone].PoseToBone, out var inverse) ? inverse : Matrix4x4.Identity;
+
+            return boneToPose * bindToRest;
+        }
+
+        private bool IsTeeth(string path)
+        {
+            if (fileSystem == null)
+            {
+                return false;
+            }
+
+            if (isTeeth.TryGetValue(path, out var cached))
+            {
+                return cached;
+            }
+
+            var teeth = false;
+
+            try
+            {
+                teeth = VmtFile.Load(path, fileSystem.OpenFile).NormalizedShaderName == "teeth";
+            }
+            catch (Exception e) when (e is InvalidDataException or IOException)
+            {
+            }
+
+            isTeeth[path] = teeth;
+
+            return teeth;
+        }
     }
 
     private static ConvertedVertex[] CreateVertices(Source1Mesh mesh, Matrix4x4 bindToRest)
@@ -493,44 +553,6 @@ internal static class Source1ModelConverter
         return vertices;
     }
 
-    private static VBIB CreateVbib(ConvertedVertex[] vertices, ushort[] indices)
-    {
-        var vbib = new VBIB { Resource = null! };
-
-        vbib.VertexBuffers.Add(new VBIB.OnDiskBufferData
-        {
-            ElementCount = (uint)vertices.Length,
-            ElementSizeInBytes = (uint)Marshal.SizeOf<ConvertedVertex>(),
-            Data = MemoryMarshal.AsBytes(vertices.AsSpan()).ToArray(),
-            InputLayoutFields =
-            [
-                CreateField("POSITION", DXGI_FORMAT.R32G32B32_FLOAT, nameof(ConvertedVertex.Position)),
-                CreateField("NORMAL", DXGI_FORMAT.R32G32B32_FLOAT, nameof(ConvertedVertex.Normal)),
-                CreateField("TANGENT", DXGI_FORMAT.R32G32B32A32_FLOAT, nameof(ConvertedVertex.Tangent)),
-                CreateField("TEXCOORD", DXGI_FORMAT.R32G32_FLOAT, nameof(ConvertedVertex.TexCoord)),
-                CreateField("BLENDINDICES", DXGI_FORMAT.R8G8B8A8_UINT, nameof(ConvertedVertex.BoneIndices)),
-                CreateField("BLENDWEIGHT", DXGI_FORMAT.R8G8B8A8_UNORM, nameof(ConvertedVertex.BoneWeights)),
-            ],
-        });
-
-        vbib.IndexBuffers.Add(new VBIB.OnDiskBufferData
-        {
-            ElementCount = (uint)indices.Length,
-            ElementSizeInBytes = sizeof(ushort),
-            Data = MemoryMarshal.AsBytes(indices.AsSpan()).ToArray(),
-            InputLayoutFields = [],
-        });
-
-        return vbib;
-    }
-
-    private static VBIB.RenderInputLayoutField CreateField(string semantic, DXGI_FORMAT format, string fieldName)
-    {
-        var offset = (uint)Marshal.OffsetOf<ConvertedVertex>(fieldName);
-
-        return new VBIB.RenderInputLayoutField(semantic, format, offset);
-    }
-
     private static uint PackBoneIndices(in Source1Vertex vertex)
     {
         var bone1 = vertex.NumBones > 1 ? vertex.Bone1 : (byte)0;
@@ -546,8 +568,8 @@ internal static class Source1ModelConverter
             return 255;
         }
 
-        var weight1 = (byte)MathF.Round(Math.Clamp(vertex.Weight1, 0f, 1f) * 255f);
-        var weight2 = vertex.NumBones > 2 ? (byte)MathF.Round(Math.Clamp(vertex.Weight2, 0f, 1f) * 255f) : (byte)0;
+        var weight1 = MathUtils.ToUnorm8(vertex.Weight1);
+        var weight2 = vertex.NumBones > 2 ? MathUtils.ToUnorm8(vertex.Weight2) : (byte)0;
 
         // The first weight takes what the others leave so the weights keep summing to one
         var weight0 = (byte)Math.Max(255 - weight1 - weight2, 0);
@@ -555,23 +577,16 @@ internal static class Source1ModelConverter
         return weight0 | ((uint)weight1 << 8) | ((uint)weight2 << 16);
     }
 
-    internal static KVObject ToArray(Vector3 value)
-    {
-        var array = KVObject.Array();
-        array.Add(value.X);
-        array.Add(value.Y);
-        array.Add(value.Z);
-        return array;
-    }
+    /// <summary>Gets the name of the material group that a converted model has for a skin family.</summary>
+    internal static string GetSkinName(int skin) => string.Create(CultureInfo.InvariantCulture, $"skin{skin}");
 
-    internal static KVObject ToArray(Quaternion value)
+    // A skin index the model does not have shows the first skin family
+    internal static string GetSkinName(Source1Model source, int skin)
     {
-        var array = KVObject.Array();
-        array.Add(value.X);
-        array.Add(value.Y);
-        array.Add(value.Z);
-        array.Add(value.W);
-        return array;
+        var skinCount = Math.Max(1, source.SkinFamilies.Length);
+        var index = (uint)skin < (uint)skinCount ? skin : 0;
+
+        return GetSkinName(index);
     }
 
     // The layout of a matrix in a mesh's inverse bind pose: columns one after another

@@ -1,6 +1,6 @@
 #version 460
 
-#include "common_vs.slang"
+#include "eyes_common_vs.slang"
 
 out vec3 vFragPosition;
 out vec2 vTexCoordOut;
@@ -11,4 +11,6 @@ void main()
     gl_Position = g_matWorldToProjection * vec4(vFragPosition, 1.0);
 
     vTexCoordOut = GetSource1BaseTexCoord(vTEXCOORD);
+
+    CalculateSource1EyeProjection();
 }

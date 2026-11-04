@@ -3,6 +3,7 @@
 #include "unlitgeneric_features.slang"
 #include "common_ps.slang"
 
+in vec3 vFragPosition;
 in vec2 vTexCoordOut;
 
 // Read as stored: the blend multiplies the framebuffer by this gamma space value twice, so 0.5 leaves it as it is
@@ -17,5 +18,9 @@ void main()
         discard;
     }
 
-    outputColor = vec4(baseColor.rgb, 1.0);
+    // Fog fades the decal to the gray that leaves the framebuffer as it is, raised to a power so that a dark fog does not leave the decal visible
+    float fogAmount = 1.0 - GetFogAttenuation(vFragPosition);
+    vec3 color = mix(baseColor.rgb, vec3(0.5), pow(saturate(fogAmount), 0.4));
+
+    outputColor = vec4(color, 1.0);
 }

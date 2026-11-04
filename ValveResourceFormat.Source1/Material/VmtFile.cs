@@ -175,57 +175,11 @@ internal sealed partial class VmtFile
                 throw new InvalidDataException("VMT dependency count exceeds 256 files.");
             }
 
-            using var stream = context.OpenFile(path) ?? throw new FileNotFoundException($"VMT not found: {path}", path);
-            using var reader = new StreamReader(stream);
-            var parser = new Parser(reader.ReadToEnd(), path, context);
-            var roots = parser.ReadDocument();
+            var roots = ReadRoots(path, context);
 
-            // Native KeyValues appends #include roots after local roots, regardless of directive position.
-            foreach (var include in parser.Includes)
+            if (IsPatch(roots))
             {
-                roots.AddRange(LoadRoots(ResolveDirectivePath(path, include), context));
-            }
-
-            foreach (var basePath in parser.Bases)
-            {
-                var bases = LoadRoots(ResolveDirectivePath(path, basePath), context);
-
-                if (roots.Count != 0 && bases.Count != 0)
-                {
-                    roots[0] = Merge(roots[0], bases[0], replace: false);
-                }
-            }
-
-            if (roots.Count != 0 && roots[0].Name.Equals("patch", StringComparison.OrdinalIgnoreCase))
-            {
-                var root = roots[0];
-
-                if (!root.Values.TryGetValue("include", out var include) || string.IsNullOrWhiteSpace(include))
-                {
-                    throw new InvalidDataException($"VMT patch has no include: {path}");
-                }
-
-                var source = LoadRoots(NormalizePath(include, ".vmt"), context);
-
-                if (source.Count == 0)
-                {
-                    throw new InvalidDataException($"VMT patch include has no active shader root: {path}");
-                }
-
-                var merged = source[0];
-
-                if (root.GetBlock("insert") is { } insert)
-                {
-                    merged = Insert(merged, insert);
-                }
-
-                if (root.GetBlock("replace") is { } replace)
-                {
-                    merged = Merge(merged, replace, replace: true);
-                }
-
-                roots[0] = merged;
-                roots.InsertRange(1, source.GetRange(1, source.Count - 1));
+                roots = ExpandPatch(path, roots, context);
             }
 
             context.Cache.Add(path, roots);
@@ -270,23 +224,103 @@ internal sealed partial class VmtFile
         return new VmtNode(target.Name, target.Value, children);
     }
 
-    // A patch insert sets its values over the ones of the material and ignores its blocks
-    private static VmtNode Insert(VmtNode target, VmtNode changes)
+    private static List<VmtNode> ReadRoots(string path, LoadContext context)
+    {
+        if (++context.FileCount > 256)
+        {
+            throw new InvalidDataException("VMT dependency count exceeds 256 files.");
+        }
+
+        using var stream = context.OpenFile(path) ?? throw new FileNotFoundException($"VMT not found: {path}", path);
+        using var reader = new StreamReader(stream);
+        var parser = new Parser(reader.ReadToEnd(), path, context);
+        var roots = parser.ReadDocument();
+
+        // Native KeyValues appends #include roots after local roots, regardless of directive position.
+        foreach (var include in parser.Includes)
+        {
+            roots.AddRange(LoadRoots(ResolveDirectivePath(path, include), context));
+        }
+
+        foreach (var basePath in parser.Bases)
+        {
+            var bases = LoadRoots(ResolveDirectivePath(path, basePath), context);
+
+            if (roots.Count != 0 && bases.Count != 0)
+            {
+                roots[0] = Merge(roots[0], bases[0], replace: false);
+            }
+        }
+
+        return roots;
+    }
+
+    private static bool IsPatch(List<VmtNode> roots)
+        => roots.Count != 0 && roots[0].Name.Equals("patch", StringComparison.OrdinalIgnoreCase);
+
+    // The chain of patch files is followed first and their insert and replace sections are gathered, so the
+    // values of the patch nearest the shader win. The sections are applied to the final material once, insert
+    // before replace.
+    private static List<VmtNode> ExpandPatch(string path, List<VmtNode> roots, LoadContext context)
+    {
+        const int MaxPatchDepth = 10;
+
+        var insert = new VmtNode("insert", null, []);
+        var replace = new VmtNode("replace", null, []);
+        var current = roots;
+
+        for (var depth = 0; depth < MaxPatchDepth && IsPatch(current); depth++)
+        {
+            var patch = current[0];
+
+            if (patch.GetBlock("insert") is { } insertSection)
+            {
+                insert = Overlay(insert, insertSection);
+            }
+
+            if (patch.GetBlock("replace") is { } replaceSection)
+            {
+                replace = Overlay(replace, replaceSection);
+            }
+
+            if (!patch.Values.TryGetValue("include", out var include) || string.IsNullOrWhiteSpace(include))
+            {
+                throw new InvalidDataException($"VMT patch has no include: {path}");
+            }
+
+            current = ReadRoots(NormalizePath(include, ".vmt"), context);
+        }
+
+        if (current.Count == 0 || IsPatch(current))
+        {
+            throw new InvalidDataException($"VMT patch include has no active shader root: {path}");
+        }
+
+        var merged = Overlay(current[0], insert);
+        merged = Merge(merged, replace, replace: true);
+        current[0] = merged;
+
+        return current;
+    }
+
+    // Sets the values of changes over the ones of the target and merges its blocks into the blocks of the same name
+    private static VmtNode Overlay(VmtNode target, VmtNode changes)
     {
         var children = new List<VmtNode>(target.Children);
 
         foreach (var change in changes.Children)
         {
-            if (change.IsBlock)
-            {
-                continue;
-            }
-
-            var index = children.FindLastIndex(child => !child.IsBlock && child.Name.Equals(change.Name, StringComparison.OrdinalIgnoreCase));
+            var index = change.IsBlock
+                ? children.FindIndex(child => child.IsBlock && child.Name.Equals(change.Name, StringComparison.OrdinalIgnoreCase))
+                : children.FindLastIndex(child => !child.IsBlock && child.Name.Equals(change.Name, StringComparison.OrdinalIgnoreCase));
 
             if (index < 0)
             {
                 children.Add(change);
+            }
+            else if (change.IsBlock)
+            {
+                children[index] = Overlay(children[index], change);
             }
             else
             {

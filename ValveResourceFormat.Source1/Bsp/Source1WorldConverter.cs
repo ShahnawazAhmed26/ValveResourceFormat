@@ -4,12 +4,14 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using ValveKeyValue;
 using ValveResourceFormat.Blocks;
+using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.ResourceTypes.ModelData;
 using ValveResourceFormat.Serialization.KeyValues;
 using ValveResourceFormat.Source1.Entities;
 using ValveResourceFormat.Source1.Material;
 using ValveResourceFormat.Source1.Model;
+using ValveResourceFormat.Utils;
 using S2Model = ValveResourceFormat.ResourceTypes.Model;
 using VrfTexture = ValveResourceFormat.ResourceTypes.Texture;
 
@@ -34,6 +36,14 @@ internal sealed class Source1ConvertedMap
 
     /// <summary>The Source 1 entities whose ropes and sprites the world draws, which need no stand-in.</summary>
     public HashSet<BspEntity> DrawnEntities { get; } = [];
+
+    /// <summary>The model that stands for the sprite of an entity, which the entity draws itself.</summary>
+    /// <param name="Path">The path of the model.</param>
+    /// <param name="StartsDisabled">Whether the sprite is hidden when the map starts.</param>
+    public readonly record struct EntitySpriteModel(string Path, bool StartsDisabled);
+
+    /// <summary>The Source 1 entities whose sprite is a model of its own, so that it can be shown and hidden.</summary>
+    public Dictionary<BspEntity, EntitySpriteModel> SpriteModels { get; } = [];
 
     /// <summary>The squared distances where the detail sprites start to fade and where they are gone, or null when the map has no detail props.</summary>
     public Vector2? DetailFadeSquared { get; set; }
@@ -74,13 +84,23 @@ internal static class Source1WorldConverter
         public uint Color;
     }
 
+    // No semantic names the lightmap coordinates, so the field names the shader input directly
+    private static readonly VertexField[] BrushVertexFields =
+    [
+        new(nameof(BrushVertex.Position), "POSITION", 0, DXGI_FORMAT.R32G32B32_FLOAT),
+        new(nameof(BrushVertex.Normal), "NORMAL", 0, DXGI_FORMAT.R32G32B32_FLOAT),
+        new(nameof(BrushVertex.Tangent), "TANGENT", 0, DXGI_FORMAT.R32G32B32A32_FLOAT),
+        new(nameof(BrushVertex.TexCoord), "TEXCOORD", 0, DXGI_FORMAT.R32G32_FLOAT),
+        new(nameof(BrushVertex.LightmapCoord), "LIGHTMAPUV", 0, DXGI_FORMAT.R32G32_FLOAT, "vLightmapUV"),
+        new(nameof(BrushVertex.Color), "COLOR", 0, DXGI_FORMAT.R8G8B8A8_UNORM),
+    ];
+
     private readonly record struct MaterialPiece(string Material, BspVertex[] Vertices, int[] Indices);
 
     /// <summary>Converts a map.</summary>
     /// <param name="bsp">The map.</param>
-    /// <param name="getDecalSize">Gets the world size of an <c>infodecal</c> texture, or null when the material is unknown.</param>
-    /// <param name="getMaterialInfo">Reads the texture and the sprite settings of a material, or returns null when it has no texture. Sprites and ropes of such materials are left out.</param>
-    /// <param name="locator">Finds the 3D sky area of the faces of the world, or null to keep the world as one model.</param>
+    /// <param name="getMaterialInfo">Reads the texture, the sprite settings and the decal scale of a material, or returns null when it has no texture. Sprites, ropes and decals of such materials are left out.</param>
+    /// <param name="locator">Finds the 3D sky area of the faces of the world.</param>
     /// <param name="loadModel">Loads a model of the game by path, or returns null when it has none. Props whose model is missing are left out.</param>
     /// <param name="openFile">Opens a file of the game or of the pakfile of the map, such as the baked lighting of a static prop.</param>
     /// <param name="sky">The 2D sky, which the map draws with an <c>env_sky</c>, or null when it has none.</param>
@@ -89,8 +109,7 @@ internal static class Source1WorldConverter
         Func<string, Source1Model?> loadModel,
         Func<string, Stream?> openFile,
         Func<string, Source1MaterialInfo?> getMaterialInfo,
-        Func<string, Vector2?>? getDecalSize = null,
-        IBrushLightingLocator? locator = null,
+        IBrushLightingLocator locator,
         Source1Sky? sky = null)
     {
         ArgumentNullException.ThrowIfNull(bsp);
@@ -103,11 +122,11 @@ internal static class Source1WorldConverter
         var entityLump = Source1EntityConverter.CreateLump(bsp.Name);
         var skyEntities = new List<EntityLump.Entity>();
         var entities = ConvertEntities(bsp, mapPath, entityLump, sourceEntities, locator, skyEntities, loadModel, openFile);
-        var modelMeshes = BspMeshBuilder.BuildAll(bsp, getDecalSize);
+        var modelMeshes = BspMeshBuilder.BuildAll(bsp, getMaterialInfo);
 
         if (sky != null)
         {
-            entities.Add(CreateSkyEntity(entityLump, sky.MaterialPath));
+            entities.Add(CreateSkyEntity(entityLump, sky));
         }
 
         var postProcessPath = $"{mapPath}/postprocess.vpost";
@@ -151,6 +170,8 @@ internal static class Source1WorldConverter
             AddFile(map, path, CreateBrushModel(pieces, path));
         }
 
+        Source1WorldPhysicsConverter.Convert(map, bsp, getMaterialInfo);
+
         var detail = Source1DetailPropConverter.Convert(map, bsp, locator);
         worldParts.AddRange(detail.WorldParts);
         skyParts.AddRange(detail.SkyParts);
@@ -175,7 +196,7 @@ internal static class Source1WorldConverter
                 continue;
             }
 
-            if (locator?.IsInSky(prop.Origin) ?? false)
+            if (locator.IsInSky(prop.Origin))
             {
                 skyProps.Add(i);
             }
@@ -219,13 +240,8 @@ internal static class Source1WorldConverter
     }
 
     // The first sky_camera is the one the engine draws the 3D sky from, when it is in an area of its own
-    private static EntityLump.Entity? FindSkyCamera(List<EntityLump.Entity> entities, IBrushLightingLocator? locator)
+    private static EntityLump.Entity? FindSkyCamera(List<EntityLump.Entity> entities, IBrushLightingLocator locator)
     {
-        if (locator == null)
-        {
-            return null;
-        }
-
         foreach (var entity in entities)
         {
             if (entity.GetStringProperty("classname") != "sky_camera")
@@ -383,7 +399,7 @@ internal static class Source1WorldConverter
 
         foreach (var (materialName, materialMesh) in model.Materials)
         {
-            if (materialMesh.Indices.Length == 0 || materialName.StartsWith("tools/", StringComparison.OrdinalIgnoreCase))
+            if (materialMesh.Indices.Length == 0)
             {
                 continue;
             }
@@ -399,7 +415,7 @@ internal static class Source1WorldConverter
     private static void AddWorldModels(
         Source1ConvertedMap map,
         BspModelMesh world,
-        IBrushLightingLocator? locator,
+        IBrushLightingLocator locator,
         List<string> worldParts,
         List<string> skyParts)
     {
@@ -415,7 +431,7 @@ internal static class Source1WorldConverter
                 var b = piece.Vertices[piece.Indices[i + 1]];
                 var c = piece.Vertices[piece.Indices[i + 2]];
                 var center = (a.Position + b.Position + c.Position) / 3f;
-                var inSky = locator?.IsInSky(center) ?? false;
+                var inSky = locator.IsInSky(center);
 
                 if (!triangles.TryGetValue(inSky, out var starts))
                 {
@@ -445,7 +461,7 @@ internal static class Source1WorldConverter
                 continue;
             }
 
-            var inSky = locator?.IsInSky(overlay.Vertices[0].Position) ?? false;
+            var inSky = locator.IsInSky(overlay.Vertices[0].Position);
             var materialPath = Source1Paths.ToMaterialPath(overlay.Material);
             var overlayMaterial = Source1Paths.AddVariant(materialPath, Source1ResourceProvider.OverlayVariant);
 
@@ -510,12 +526,12 @@ internal static class Source1WorldConverter
         string mapPath,
         EntityLump lump,
         List<BspEntity> sources,
-        IBrushLightingLocator? locator,
+        IBrushLightingLocator locator,
         List<EntityLump.Entity> skyEntities,
         Func<string, Source1Model?> loadModel,
         Func<string, Stream?> openFile)
     {
-        var options = new Source1EntityConverterOptions { HdrLighting = bsp.HasHdrLighting };
+        var options = Source1EntityConverterOptions.ForMap(bsp);
         var entities = new List<EntityLump.Entity>(bsp.Entities.Count);
         var entityModels = new Source1EntityModels(openFile, bsp.Name, bsp.Entities);
 
@@ -535,7 +551,7 @@ internal static class Source1WorldConverter
             }
             else if (ConvertEntityModel(entityModels, source, entity, loadModel))
             {
-                isInSky = locator?.IsInSky(source.Origin) ?? false;
+                isInSky = locator.IsInSky(source.Origin);
             }
 
             if (isInSky)
@@ -577,7 +593,7 @@ internal static class Source1WorldConverter
             return;
         }
 
-        var extension = bsp.HasHdrLighting ? ".hdr.vtf" : ".vtf";
+        var extension = bsp.HasHdrLighting ? Source1Paths.HdrTextureExtension : Source1Paths.TextureExtension;
 
         foreach (var sample in bsp.Cubemaps)
         {
@@ -592,19 +608,29 @@ internal static class Source1WorldConverter
     {
         var entity = new EntityLump.Entity { ParentLump = lump };
         entity["classname"] = "env_cubemap";
-        entity["origin"] = string.Create(CultureInfo.InvariantCulture, $"{origin.X} {origin.Y} {origin.Z}");
+        entity["origin"] = Source1EntityConverter.FormatVector(origin);
         entity["cubemaptexture"] = texture;
         entity["influenceradius"] = radius;
 
         return entity;
     }
 
-    private static EntityLump.Entity CreateSkyEntity(EntityLump lump, string material)
+    private static EntityLump.Entity CreateSkyEntity(EntityLump lump, Source1Sky sky)
     {
         var entity = new EntityLump.Entity { ParentLump = lump };
         entity["classname"] = "env_sky";
-        entity["skyname"] = material;
+        entity["skyname"] = sky.MaterialPath;
         entity["fog_type"] = 0L;
+
+        // The tint color is a gamma color of at most one, so a brighter tint moves its scale into the brightness
+        var brightness = MathF.Max(MathF.Max(sky.Tint.X, sky.Tint.Y), sky.Tint.Z);
+
+        if (sky.Tint != Vector3.One && brightness > 0f)
+        {
+            var tintColor = ColorSpace.SrgbLinearToGamma(sky.Tint / brightness) * 255f;
+            entity["tint_color"] = Source1EntityConverter.FormatVector(tintColor);
+            entity["brightnessscale"] = brightness;
+        }
 
         return entity;
     }
@@ -627,12 +653,13 @@ internal static class Source1WorldConverter
                 && index > 0
                 && index < bsp.Models.Length;
 
-            if (!isBrushModel || Source1EntityConverter.IsHiddenAtSpawn(source))
+            if (!isBrushModel)
             {
                 entity["model"] = string.Empty;
                 return 0;
             }
 
+            SetStartDisabled(source, entity);
             entity["model"] = GetBrushModelPath(mapPath, index);
             return index;
         }
@@ -649,14 +676,9 @@ internal static class Source1WorldConverter
         return 0;
     }
 
-    // A brush entity is placed by its entity transform, so it is in the 3D sky box area when the center of its model is
-    private static bool IsBrushEntityInSky(BspFile bsp, BspEntity source, int modelIndex, IBrushLightingLocator? locator)
+    // A brush entity is placed by its entity transform, so it is in the 3D sky box area when the center of its model is in it
+    private static bool IsBrushEntityInSky(BspFile bsp, BspEntity source, int modelIndex, IBrushLightingLocator locator)
     {
-        if (locator == null)
-        {
-            return false;
-        }
-
         var bounds = bsp.Models[modelIndex];
         var transform = EntityTransformHelper.ToRigidTransformationMatrix(source.Angles, source.Origin);
         var center = Vector3.Transform((bounds.Min + bounds.Max) * 0.5f, transform);
@@ -709,16 +731,14 @@ internal static class Source1WorldConverter
             entity["fogobjects"] = true;
         }
 
-        SetFogCurve(entity);
+        SetFogCurve(entity, start, end);
     }
 
     // Source 1 fogs a pixel by the square of min(maxdensity, saturate((distance - start) / (end - start))). That is
     // the Source 2 fog curve raised to the power 2, once the density cap moves into the end distance and the maximum
     // density is squared.
-    private static void SetFogCurve(EntityLump.Entity entity)
+    private static void SetFogCurve(EntityLump.Entity entity, float start, float end)
     {
-        var start = entity.GetFloatProperty("fogstart");
-        var end = entity.GetFloatProperty("fogend");
         var maxDensity = Math.Clamp(entity.GetFloatProperty("fogmaxdensity", 1f), 0f, 1f);
 
         if (end > start && maxDensity > 0f)
@@ -742,10 +762,35 @@ internal static class Source1WorldConverter
                 continue;
             }
 
-            if (map.DrawnEntities.Contains(map.SourceEntities[(int)index]))
+            var source = map.SourceEntities[(int)index];
+
+            if (map.DrawnEntities.Contains(source))
             {
                 entity["drawnbyworld"] = true;
             }
+
+            if (map.SpriteModels.TryGetValue(source, out var spriteModel))
+            {
+                entity["classname"] = "func_brush";
+                entity["model"] = spriteModel.Path;
+
+                // The angles of a sprite are part of its quad
+                entity["angles"] = Source1EntityConverter.FormatVector(Vector3.Zero);
+
+                if (spriteModel.StartsDisabled)
+                {
+                    entity["startdisabled"] = 1L;
+                }
+            }
+        }
+    }
+
+    // An entity that does not draw its model at spawn keeps it, and starts disabled so its inputs can show it
+    private static void SetStartDisabled(BspEntity source, EntityLump.Entity entity)
+    {
+        if (Source1EntityConverter.IsHiddenAtSpawn(source))
+        {
+            entity["startdisabled"] = 1L;
         }
     }
 
@@ -753,7 +798,7 @@ internal static class Source1WorldConverter
     // the entity draws it, in the pose of the sequence the entity starts with. Returns whether the entity has a model.
     private static bool ConvertEntityModel(Source1EntityModels entityModels, BspEntity source, EntityLump.Entity entity, Func<string, Source1Model?> loadModel)
     {
-        if (Source1EntityConverter.IsHiddenAtSpawn(source) || entityModels.IsSpawnedLater(source))
+        if (entityModels.IsSpawnedLater(source))
         {
             return false;
         }
@@ -763,15 +808,18 @@ internal static class Source1WorldConverter
             return false;
         }
 
+        SetStartDisabled(source, entity);
+        entity["model"] = entityModel.Path;
+
+        // A model that does not load is drawn as the error model by the entity
         var model = loadModel(entityModel.Path);
 
         if (model == null)
         {
-            return false;
+            return true;
         }
 
-        entity["model"] = entityModel.Path;
-        entity["skin"] = GetSkinName(model, entityModel.Skin);
+        entity["skin"] = Source1ModelConverter.GetSkinName(model, entityModel.Skin);
         entity["model_state"] = EntityLump.StringifyValue(CreateModelState(model, entityModel));
 
         // The body value picks a sub-model of every body group, which the model state holds by name
@@ -785,15 +833,6 @@ internal static class Source1WorldConverter
         }
 
         return true;
-    }
-
-    // The converted model names its skin families by index, and an index the model does not have shows the first family
-    private static string GetSkinName(Source1Model model, int skin)
-    {
-        var skinCount = Math.Max(1, model.SkinFamilies.Length);
-        var index = (uint)skin < (uint)skinCount ? skin : 0;
-
-        return string.Create(CultureInfo.InvariantCulture, $"skin{index}");
     }
 
     private static KVObject CreateModelState(Source1Model model, Source1EntityModel entityModel)
@@ -939,7 +978,7 @@ internal static class Source1WorldConverter
         data.Add("m_bloomParams", KVObject.Collection());
 
         var resource = new Resource(ResourceType.PostProcessing);
-        resource.UnparsedBlocks.Add(new PostProcessing { Resource = resource, Data = data });
+        resource.AddBlock(new PostProcessing { Resource = resource, Data = data });
 
         return resource;
     }
@@ -973,7 +1012,7 @@ internal static class Source1WorldConverter
         data.Add("m_worldNodes", nodes);
         data.Add("m_worldLightingInfo", lighting);
 
-        resource.UnparsedBlocks.Add(new World { Resource = resource, Data = data });
+        resource.AddBlock(new World { Resource = resource, Data = data });
 
         return resource;
     }
@@ -992,18 +1031,11 @@ internal static class Source1WorldConverter
 
         foreach (var part in parts)
         {
-            var tint = KVObject.Array();
-
-            for (var i = 0; i < 4; i++)
-            {
-                tint.Add(1f);
-            }
-
             var sceneObject = KVObject.Collection();
             sceneObject.Add("m_renderableModel", part);
             sceneObject.Add("m_vTransform", ToColumns(Matrix4x4.Identity));
             sceneObject.Add("m_nObjectTypeFlags", 0L);
-            sceneObject.Add("m_vTintColor", tint);
+            sceneObject.Add("m_vTintColor", KVHelpers.ToKVArray(Vector4.One));
             sceneObjects.Add(sceneObject);
         }
 
@@ -1029,31 +1061,17 @@ internal static class Source1WorldConverter
             data.Add("m_extraVertexStreamOverrides", props.ExtraVertexStreamOverrides);
         }
 
-        resource.UnparsedBlocks.Add(new WorldNode { Resource = resource, Data = data });
+        resource.AddBlock(new WorldNode { Resource = resource, Data = data });
 
         return resource;
     }
 
     // The transform of a scene object is four columns of four floats each
-    internal static KVObject ToColumns(Matrix4x4 value)
-    {
-        var columns = KVObject.Array();
-        var flat = Source1ModelConverter.ToArray(value);
-
-        for (var column = 0; column < 4; column++)
-        {
-            var values = KVObject.Array();
-
-            for (var row = 0; row < 4; row++)
-            {
-                values.Add(flat.GetElement<float>((column * 4) + row));
-            }
-
-            columns.Add(values);
-        }
-
-        return columns;
-    }
+    internal static KVObject ToColumns(Matrix4x4 value) => KVHelpers.MakeArray(
+        KVHelpers.MakeArray(value.M11, value.M21, value.M31, value.M41),
+        KVHelpers.MakeArray(value.M12, value.M22, value.M32, value.M42),
+        KVHelpers.MakeArray(value.M13, value.M23, value.M33, value.M43),
+        KVHelpers.MakeArray(value.M14, value.M24, value.M34, value.M44));
 
     private static Resource CreateEntityLump(string path, string name, List<EntityLump.Entity> entities)
     {
@@ -1091,13 +1109,19 @@ internal static class Source1WorldConverter
         lump.Data.Remove("m_entityKeyValues");
         lump.Data.Add("m_entityKeyValues", keyValues);
         resource.FileName = path;
-        resource.UnparsedBlocks.Add(lump);
+        resource.AddBlock(lump);
 
         return resource;
     }
 
     private static Resource CreateBrushModel(List<MaterialPiece> pieces, string path)
     {
+        // A volume that draws nothing is only its collision, as in compiled Source 2 maps
+        if (pieces.Count == 0)
+        {
+            return S2Model.Create(path, [], [], [], [], 0UL);
+        }
+
         var vertices = new List<BrushVertex>();
         var indices = new List<int>();
         var drawCalls = new List<MeshDrawCall>();
@@ -1123,36 +1147,17 @@ internal static class Source1WorldConverter
         }
 
         var vertexArray = vertices.ToArray();
-        var (min, max) = GetBounds(vertexArray);
-        var buffers = CreateVbib(vertexArray, indices.ToArray());
+        var (min, max) = Source1VertexBuffers.GetBounds(vertexArray, vertex => vertex.Position);
+        var buffers = Source1VertexBuffers.Create(vertexArray, BrushVertexFields, indices.ToArray());
         var mesh = new ModelMeshSource("brush", buffers, drawCalls, min, max) { MeshGroupMask = 1UL };
-        var materialGroups = new List<ModelMaterialGroup> { new("skin0", materials) };
+        var materialGroups = new List<ModelMaterialGroup> { new(Source1ModelConverter.GetSkinName(0), materials) };
 
         return S2Model.Create(path, [mesh], [], materialGroups, ["brush"], 1UL);
     }
 
-    private static (Vector3 Min, Vector3 Max) GetBounds(BrushVertex[] vertices)
-    {
-        if (vertices.Length == 0)
-        {
-            return (Vector3.Zero, Vector3.Zero);
-        }
-
-        var min = vertices[0].Position;
-        var max = min;
-
-        foreach (var vertex in vertices)
-        {
-            min = Vector3.Min(min, vertex.Position);
-            max = Vector3.Max(max, vertex.Position);
-        }
-
-        return (min, max);
-    }
-
     private static BrushVertex CreateVertex(in BspVertex vertex)
     {
-        var alpha = (byte)MathF.Round(Math.Clamp(vertex.DisplacementAlpha, 0f, 1f) * 255f);
+        var alpha = MathUtils.ToUnorm8(vertex.DisplacementAlpha);
 
         return new BrushVertex
         {
@@ -1163,52 +1168,5 @@ internal static class Source1WorldConverter
             LightmapCoord = vertex.LightmapCoord,
             Color = 0x00FFFFFFu | ((uint)alpha << 24),
         };
-    }
-
-    private static VBIB CreateVbib(BrushVertex[] vertices, int[] indices)
-    {
-        var vbib = new VBIB { Resource = null! };
-
-        vbib.VertexBuffers.Add(new VBIB.OnDiskBufferData
-        {
-            ElementCount = (uint)vertices.Length,
-            ElementSizeInBytes = (uint)Marshal.SizeOf<BrushVertex>(),
-            Data = MemoryMarshal.AsBytes(vertices.AsSpan()).ToArray(),
-            InputLayoutFields =
-            [
-                CreateField("POSITION", DXGI_FORMAT.R32G32B32_FLOAT, nameof(BrushVertex.Position)),
-                CreateField("NORMAL", DXGI_FORMAT.R32G32B32_FLOAT, nameof(BrushVertex.Normal)),
-                CreateField("TANGENT", DXGI_FORMAT.R32G32B32A32_FLOAT, nameof(BrushVertex.Tangent)),
-                CreateField("TEXCOORD", DXGI_FORMAT.R32G32_FLOAT, nameof(BrushVertex.TexCoord)),
-                CreateLightmapField(),
-                CreateField("COLOR", DXGI_FORMAT.R8G8B8A8_UNORM, nameof(BrushVertex.Color)),
-            ],
-        });
-
-        vbib.IndexBuffers.Add(new VBIB.OnDiskBufferData
-        {
-            ElementCount = (uint)indices.Length,
-            ElementSizeInBytes = sizeof(int),
-            Data = MemoryMarshal.AsBytes(indices.AsSpan()).ToArray(),
-            InputLayoutFields = [],
-        });
-
-        return vbib;
-    }
-
-    private static VBIB.RenderInputLayoutField CreateField(string semantic, DXGI_FORMAT format, string fieldName)
-    {
-        var offset = (uint)Marshal.OffsetOf<BrushVertex>(fieldName);
-
-        return new VBIB.RenderInputLayoutField(semantic, format, offset);
-    }
-
-    // No semantic names the lightmap coordinates, so the field names the shader input directly
-    private static VBIB.RenderInputLayoutField CreateLightmapField()
-    {
-        var field = CreateField("LIGHTMAPUV", DXGI_FORMAT.R32G32_FLOAT, nameof(BrushVertex.LightmapCoord));
-        field.ShaderSemantic = "vLightmapUV";
-
-        return field;
     }
 }

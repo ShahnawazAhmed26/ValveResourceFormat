@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
 using ValveResourceFormat.ResourceTypes;
+using ValveResourceFormat.Source1.Entities;
 using VrfTexture = ValveResourceFormat.ResourceTypes.Texture;
 
 namespace ValveResourceFormat.Source1.Bsp;
@@ -16,8 +17,6 @@ internal static class Source1LightProbeBaker
 
     // Cells around a tile that are filled in the same way as the tile, so the filling is the same on both sides of a tile edge
     private const int Margin = 4;
-
-    private const int FillPasses = Margin;
 
     // The scene lights at most this many volumes
     private const int MaxVolumes = 256;
@@ -39,27 +38,16 @@ internal static class Source1LightProbeBaker
     /// <param name="map">The converted map, which receives the textures and the entities of the volumes outside the 3D sky area.</param>
     /// <param name="bsp">The map.</param>
     /// <param name="lump">The entity lump the entities belong to.</param>
-    /// <param name="locator">Finds the 3D sky area, or null when the map has none.</param>
+    /// <param name="locator">Finds the 3D sky area.</param>
     /// <param name="skyVolumes">Receives the entities of the volumes inside the 3D sky area, which light only what is drawn there.</param>
-    public static void Add(Source1ConvertedMap map, BspFile bsp, EntityLump lump, IBrushLightingLocator? locator, List<EntityLump.Entity> skyVolumes)
+    public static void Add(Source1ConvertedMap map, BspFile bsp, EntityLump lump, IBrushLightingLocator locator, List<EntityLump.Entity> skyVolumes)
     {
-        ArgumentNullException.ThrowIfNull(map);
-        ArgumentNullException.ThrowIfNull(bsp);
-        ArgumentNullException.ThrowIfNull(lump);
-        ArgumentNullException.ThrowIfNull(skyVolumes);
-
         if (bsp.Models.Length == 0)
         {
             return;
         }
 
         var leaves = new BspLeafAmbient(bsp);
-
-        if (locator == null)
-        {
-            AddRegion(map, leaves, lump, bsp.Models[0], static _ => true, "probe", map.Entities);
-            return;
-        }
 
         AddRegion(map, leaves, lump, bsp.Models[0], position => !locator.IsInSky(position), "probe", map.Entities);
         AddRegion(map, leaves, lump, bsp.Models[0], locator.IsInSky, "skyprobe", skyVolumes);
@@ -207,18 +195,15 @@ internal static class Source1LightProbeBaker
 
         var entity = new EntityLump.Entity { ParentLump = lump };
         entity["classname"] = "env_light_probe_volume";
-        entity["origin"] = FormatVector(center);
-        entity["box_mins"] = FormatVector(-size * 0.5f);
-        entity["box_maxs"] = FormatVector(size * 0.5f);
-        entity["edge_fade_dists"] = FormatVector(Vector3.Zero);
+        entity["origin"] = Source1EntityConverter.FormatVector(center);
+        entity["box_mins"] = Source1EntityConverter.FormatVector(-size * 0.5f);
+        entity["box_maxs"] = Source1EntityConverter.FormatVector(size * 0.5f);
+        entity["edge_fade_dists"] = Source1EntityConverter.FormatVector(Vector3.Zero);
         entity["voxel_size"] = grid.CellSize;
         entity["lightprobetexture"] = path;
 
         return entity;
     }
-
-    private static string FormatVector(Vector3 value)
-        => string.Create(CultureInfo.InvariantCulture, $"{value.X} {value.Y} {value.Z}");
 
     // The cells of the tile and the margin around it, each with the six faces of its ambient cube
     private sealed class CellBlock
@@ -256,9 +241,15 @@ internal static class Source1LightProbeBaker
                 for (var x = 0; x < block.SizeX; x++)
                 {
                     var center = GetCellCenter(grid, tile.X + x - Margin, tile.Y + y - Margin, tile.Z + z - Margin);
+
+                    if (!contains(center))
+                    {
+                        continue;
+                    }
+
                     var leaf = leaves.FindLeaf(center);
 
-                    if (!contains(center) || !leaves.HasAmbient(leaf))
+                    if (!leaves.HasAmbient(leaf))
                     {
                         continue;
                     }
@@ -275,7 +266,7 @@ internal static class Source1LightProbeBaker
             }
         }
 
-        for (var pass = 0; pass < FillPasses; pass++)
+        for (var pass = 0; pass < Margin; pass++)
         {
             FillFromNeighbors(block);
         }
@@ -320,31 +311,33 @@ internal static class Source1LightProbeBaker
         var count = 0;
         Span<Vector3> sum = stackalloc Vector3[BspLeafAmbient.FaceCount];
 
-        for (var direction = 0; direction < 6; direction++)
+        if (AddNeighbor(block, x + 1, y, z, sum))
         {
-            var step = direction % 2 == 0 ? 1 : -1;
-            var axis = direction / 2;
-            var nx = axis == 0 ? x + step : x;
-            var ny = axis == 1 ? y + step : y;
-            var nz = axis == 2 ? z + step : z;
+            count++;
+        }
 
-            if ((uint)nx >= (uint)block.SizeX || (uint)ny >= (uint)block.SizeY || (uint)nz >= (uint)block.SizeZ)
-            {
-                continue;
-            }
+        if (AddNeighbor(block, x - 1, y, z, sum))
+        {
+            count++;
+        }
 
-            var neighbor = block.GetIndex(nx, ny, nz);
+        if (AddNeighbor(block, x, y + 1, z, sum))
+        {
+            count++;
+        }
 
-            if (!block.Valid[neighbor])
-            {
-                continue;
-            }
+        if (AddNeighbor(block, x, y - 1, z, sum))
+        {
+            count++;
+        }
 
-            for (var face = 0; face < BspLeafAmbient.FaceCount; face++)
-            {
-                sum[face] += block.Cubes[(neighbor * BspLeafAmbient.FaceCount) + face];
-            }
+        if (AddNeighbor(block, x, y, z + 1, sum))
+        {
+            count++;
+        }
 
+        if (AddNeighbor(block, x, y, z - 1, sum))
+        {
             count++;
         }
 
@@ -356,6 +349,29 @@ internal static class Source1LightProbeBaker
         for (var face = 0; face < BspLeafAmbient.FaceCount; face++)
         {
             block.Cubes[(cell * BspLeafAmbient.FaceCount) + face] = sum[face] / count;
+        }
+
+        return true;
+    }
+
+    // Adds the faces of a filled cell to the sums, and returns false for a cell that is outside the block or empty
+    private static bool AddNeighbor(CellBlock block, int x, int y, int z, Span<Vector3> sum)
+    {
+        if ((uint)x >= (uint)block.SizeX || (uint)y >= (uint)block.SizeY || (uint)z >= (uint)block.SizeZ)
+        {
+            return false;
+        }
+
+        var neighbor = block.GetIndex(x, y, z);
+
+        if (!block.Valid[neighbor])
+        {
+            return false;
+        }
+
+        for (var face = 0; face < BspLeafAmbient.FaceCount; face++)
+        {
+            sum[face] += block.Cubes[(neighbor * BspLeafAmbient.FaceCount) + face];
         }
 
         return true;

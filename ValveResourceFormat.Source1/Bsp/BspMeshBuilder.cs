@@ -1,3 +1,5 @@
+using ValveResourceFormat.Source1.Material;
+
 namespace ValveResourceFormat.Source1.Bsp;
 
 /// <summary>A vertex of a BSP mesh. Normals, tangents and positions are in Source world units.</summary>
@@ -107,20 +109,20 @@ internal static class BspMeshBuilder
     /// Builds the meshes of every brush model, using the HDR lightmap lump and faces when the map has them.
     /// </summary>
     /// <param name="bsp">The map.</param>
-    /// <param name="getDecalSize">Gets the world size of an <c>infodecal</c> texture, or null when the material is unknown. Decals are left out when this is null.</param>
-    public static BspModelMesh[] BuildAll(BspFile bsp, Func<string, Vector2?>? getDecalSize = null)
+    /// <param name="getMaterialInfo">Reads the texture size and decal scale of a material, or returns null when it is unknown. Decals are left out when this is null.</param>
+    public static BspModelMesh[] BuildAll(BspFile bsp, Func<string, Source1MaterialInfo?>? getMaterialInfo = null)
     {
         var result = new BspModelMesh[bsp.Models.Length];
 
         for (var i = 0; i < result.Length; i++)
         {
-            result[i] = Build(bsp, i, getDecalSize);
+            result[i] = Build(bsp, i, getMaterialInfo);
         }
 
         return result;
     }
 
-    private static BspModelMesh Build(BspFile bsp, int modelIndex, Func<string, Vector2?>? getDecalSize)
+    private static BspModelMesh Build(BspFile bsp, int modelIndex, Func<string, Source1MaterialInfo?>? getMaterialInfo)
     {
         var model = bsp.Models[modelIndex];
         var mesh = new BspModelMesh(modelIndex);
@@ -134,7 +136,7 @@ internal static class BspMeshBuilder
             AddFace(context, faceIndex, mesh);
         }
 
-        BspOverlayBuilder.AddOverlays(context, firstFace, end, mesh, getDecalSize);
+        BspOverlayBuilder.AddOverlays(context, firstFace, end, mesh, getMaterialInfo);
 
         foreach (var material in mesh.Materials.Values)
         {
@@ -243,7 +245,7 @@ internal static class BspMeshBuilder
             return;
         }
 
-        AddPolygon(context, face, texInfo, textureScale, lightmapMin, lightmapSize, vertices, indices);
+        AddPolygon(context, faceIndex, face, texInfo, textureScale, lightmapMin, lightmapSize, vertices, indices);
     }
 
     private static Vector2 GetTexCoord(Vector3 position, BspTextureInfo texInfo, Vector2 textureScale)
@@ -272,7 +274,7 @@ internal static class BspMeshBuilder
         return new Vector4(tangent, handedness);
     }
 
-    private static void AddPolygon(BuildContext context, BspFace face, BspTextureInfo texInfo, Vector2 textureScale,
+    private static void AddPolygon(BuildContext context, int faceIndex, BspFace face, BspTextureInfo texInfo, Vector2 textureScale,
         Vector2 lightmapMin, Vector2 lightmapSize, List<BspVertex> vertices, List<int> indices)
     {
         var bsp = context.Bsp;
@@ -282,13 +284,22 @@ internal static class BspMeshBuilder
             return;
         }
 
-        var normal = bsp.Planes[face.PlaneNum].Normal;
-        var tangent = GetTangent(texInfo, normal);
+        var planeNormal = bsp.Planes[face.PlaneNum].Normal;
         var lightmapDivisor = new Vector2(Math.Max(face.LightMapSizeX, 1), Math.Max(face.LightMapSizeY, 1));
         var lightmapOffset = new Vector2(face.LightMapOffsetX, face.LightMapOffsetY);
 
-        BspVertex CreateVertex(Vector3 position)
+        // The corner is the edge index of the face, or -1 for a vertex that is not a corner of the face
+        BspVertex CreateVertex(Vector3 position, int corner)
         {
+            var normal = planeNormal;
+
+            if (corner >= 0 && bsp.TryGetFaceVertexNormal(faceIndex, corner, out var vertexNormal))
+            {
+                normal = vertexNormal;
+            }
+
+            var tangent = GetTangent(texInfo, normal);
+
             var lightmapU = texInfo.LightmapUAxis.GetCoordinate(position);
             var lightmapV = texInfo.LightmapVAxis.GetCoordinate(position);
             var lightmapCoord = (new Vector2(lightmapU, lightmapV) - lightmapOffset) / lightmapDivisor;
@@ -312,7 +323,7 @@ internal static class BspMeshBuilder
 
         for (var i = 0; i < face.NumEdges; i++)
         {
-            vertices.Add(CreateVertex(bsp.GetVertexFromSurfEdge(face.FirstEdge + i)));
+            vertices.Add(CreateVertex(bsp.GetVertexFromSurfEdge(face.FirstEdge + i), i));
         }
 
         // Source winds faces clockwise, the output winds counter-clockwise
@@ -322,7 +333,7 @@ internal static class BspMeshBuilder
         }
     }
 
-    private static bool TryAddPrimitives(BspFile bsp, BspFace face, Func<Vector3, BspVertex> createVertex,
+    private static bool TryAddPrimitives(BspFile bsp, BspFace face, Func<Vector3, int, BspVertex> createVertex,
         List<BspVertex> vertices, List<int> indices)
     {
         var primitives = bsp.Primitives;
@@ -362,7 +373,7 @@ internal static class BspMeshBuilder
 
                     for (var i = 0; i < face.NumEdges; i++)
                     {
-                        vertices.Add(createVertex(bsp.GetVertexFromSurfEdge(face.FirstEdge + i)));
+                        vertices.Add(createVertex(bsp.GetVertexFromSurfEdge(face.FirstEdge + i), i));
                     }
                 }
 
@@ -382,7 +393,7 @@ internal static class BspMeshBuilder
 
                 for (var i = 0; i < primitive.VertCount; i++)
                 {
-                    vertices.Add(createVertex(primitiveVertices[primitive.FirstVert + i]));
+                    vertices.Add(createVertex(primitiveVertices[primitive.FirstVert + i], -1));
                 }
             }
 

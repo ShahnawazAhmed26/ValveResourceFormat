@@ -1,8 +1,7 @@
 using System.Globalization;
-using System.Runtime.InteropServices;
-using ValveResourceFormat.Blocks;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.ResourceTypes.ModelData;
+using ValveResourceFormat.Source1.Model;
 using S2Model = ValveResourceFormat.ResourceTypes.Model;
 
 namespace ValveResourceFormat.Source1.Bsp;
@@ -107,53 +106,23 @@ internal sealed class Source1BakedMeshSet<TVertex>(string namePrefix, VertexFiel
         }
     }
 
+    /// <summary>Adds the model of a chunk that is not placed by its map area, such as the model of an entity.</summary>
+    /// <param name="map">The converted map.</param>
+    /// <param name="path">The path of the model.</param>
+    /// <param name="materialPath">The path of the material of the chunk.</param>
+    /// <param name="chunk">The chunk, see <see cref="Get"/>.</param>
+    public void AddModel(Source1ConvertedMap map, string path, string materialPath, Chunk chunk)
+        => Source1WorldConverter.AddFile(map, path, CreateModel(path, materialPath, chunk));
+
     private Resource CreateModel(string path, string materialPath, Chunk chunk)
     {
         var vertices = chunk.Vertices;
         var indices = chunk.Indices;
         var drawCall = new MeshDrawCall(materialPath, 0, vertices.Length, 0, indices.Length);
-        var buffers = CreateVbib(vertices, indices);
+        var buffers = Source1VertexBuffers.Create(vertices, fields, indices);
         var mesh = new ModelMeshSource(namePrefix, buffers, [drawCall], chunk.Min, chunk.Max) { MeshGroupMask = 1UL };
-        var materialGroups = new List<ModelMaterialGroup> { new("skin0", [materialPath]) };
+        var materialGroups = new List<ModelMaterialGroup> { new(Source1ModelConverter.GetSkinName(0), [materialPath]) };
 
         return S2Model.Create(path, [mesh], [], materialGroups, [namePrefix], 1UL);
     }
-
-    private VBIB CreateVbib(TVertex[] vertices, int[] indices)
-    {
-        var vbib = new VBIB { Resource = null! };
-        var inputFields = new List<VBIB.RenderInputLayoutField>();
-
-        foreach (var field in fields)
-        {
-            var offset = (uint)Marshal.OffsetOf<TVertex>(field.Name);
-
-            inputFields.Add(new VBIB.RenderInputLayoutField(field.Semantic, field.Format, offset) { SemanticIndex = field.SemanticIndex });
-        }
-
-        vbib.VertexBuffers.Add(new VBIB.OnDiskBufferData
-        {
-            ElementCount = (uint)vertices.Length,
-            ElementSizeInBytes = (uint)Marshal.SizeOf<TVertex>(),
-            Data = MemoryMarshal.AsBytes(vertices.AsSpan()).ToArray(),
-            InputLayoutFields = [.. inputFields],
-        });
-
-        vbib.IndexBuffers.Add(new VBIB.OnDiskBufferData
-        {
-            ElementCount = (uint)indices.Length,
-            ElementSizeInBytes = sizeof(int),
-            Data = MemoryMarshal.AsBytes(indices.AsSpan()).ToArray(),
-            InputLayoutFields = [],
-        });
-
-        return vbib;
-    }
 }
-
-/// <summary>A field of a vertex struct that a model reads as a vertex attribute.</summary>
-/// <param name="Name">The name of the field.</param>
-/// <param name="Semantic">The semantic of the attribute, such as <c>TEXCOORD</c>.</param>
-/// <param name="SemanticIndex">The index of the attribute among those of its semantic.</param>
-/// <param name="Format">The format of the field.</param>
-internal readonly record struct VertexField(string Name, string Semantic, int SemanticIndex, DXGI_FORMAT Format);

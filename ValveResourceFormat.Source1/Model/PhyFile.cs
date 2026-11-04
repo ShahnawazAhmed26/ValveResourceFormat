@@ -15,6 +15,12 @@ internal sealed class PhyFile
         public Vector3 MassCenter { get; init; }
         public Vector3 RawInertia { get; init; }
         public required List<Vector3[]> Convexes { get; init; }
+
+        /// <summary>The triangles of each convex, three indices into its points per triangle.</summary>
+        public required List<int[]> ConvexTriangles { get; init; }
+
+        /// <summary>The material index of each convex, into the material table of the key values, where 0 is the default.</summary>
+        public required List<int> ConvexMaterials { get; init; }
     }
 
     private const int MinSurfaceVersion = 0x100;
@@ -45,20 +51,41 @@ internal sealed class PhyFile
         Range(0, headerSize);
 
         Checksum = Int(12);
-        var count = Int(8);
+        Solids = ReadSolids(headerSize, Int(8), data.Length, out var offset);
+        KeyValuesText = ReadText(offset, data.Length);
+    }
 
-        if (count < 0 || count > ushort.MaxValue || count > (data.Length - headerSize) / 52)
+    /// <summary>
+    /// Reads the solids of one model of the collision lump of a map, which are laid out like the solids of a PHY file
+    /// and followed by their key values.
+    /// </summary>
+    /// <param name="data">The lump.</param>
+    /// <param name="offset">Where the first solid starts.</param>
+    /// <param name="solidCount">The number of solids.</param>
+    /// <param name="solidsLength">The length of the solids.</param>
+    /// <param name="keyValuesLength">The length of the key values that follow the solids.</param>
+    public PhyFile(byte[] data, int offset, int solidCount, int solidsLength, int keyValuesLength)
+    {
+        this.data = data;
+        var solidsEnd = offset + solidsLength;
+
+        Solids = ReadSolids(offset, solidCount, solidsEnd, out _);
+        KeyValuesText = ReadText(solidsEnd, solidsEnd + keyValuesLength);
+    }
+
+    private Solid[] ReadSolids(int offset, int count, int solidsEnd, out int end)
+    {
+        if (count < 0 || count > ushort.MaxValue || count > (solidsEnd - offset) / 52)
         {
             throw Error("invalid solid count.");
         }
 
-        Solids = new Solid[count];
-        var offset = headerSize;
+        var solids = new Solid[count];
 
         for (var i = 0; i < count; i++)
         {
             rangeStart = 0;
-            rangeEnd = data.Length;
+            rangeEnd = solidsEnd;
 
             var size = Int(offset);
 
@@ -67,7 +94,7 @@ internal sealed class PhyFile
                 throw Error($"solid {i} is smaller than its header.");
             }
 
-            var end = Range((long)offset + 4, size) + size;
+            var solidEnd = Range((long)offset + 4, size) + size;
             var compact = offset + 4;
 
             if (Int(compact) == 0x59485056) // VPHY
@@ -87,7 +114,7 @@ internal sealed class PhyFile
             }
             else
             {
-                rangeEnd = end;
+                rangeEnd = solidEnd;
             }
 
             rangeStart = compact;
@@ -98,20 +125,40 @@ internal sealed class PhyFile
             var rootOffset = Int(compact + 32);
 
             rangeStart = compact + 48;
-            var convexes = ReadTree(Relative(compact, rootOffset, 28));
+            var materials = new List<int>();
+            var triangles = new List<int[]>();
+            var convexes = ReadTree(Relative(compact, rootOffset, 28), materials, triangles);
 
-            Solids[i] = new Solid { Index = i, MassCenter = center, RawInertia = inertia, Convexes = convexes };
-            offset = end;
+            solids[i] = new Solid
+            {
+                Index = i,
+                MassCenter = center,
+                RawInertia = inertia,
+                Convexes = convexes,
+                ConvexTriangles = triangles,
+                ConvexMaterials = materials,
+            };
+            offset = solidEnd;
         }
 
-        if (offset < data.Length)
-        {
-            var textEnd = Array.IndexOf(data, (byte)0, offset);
-            KeyValuesText = System.Text.Encoding.UTF8.GetString(data, offset, (textEnd < 0 ? data.Length : textEnd) - offset);
-        }
+        end = offset;
+        return solids;
     }
 
-    private List<Vector3[]> ReadTree(int root)
+    private string ReadText(int offset, int end)
+    {
+        if (offset >= end)
+        {
+            return string.Empty;
+        }
+
+        var textEnd = Array.IndexOf(data, (byte)0, offset, end - offset);
+        var length = (textEnd < 0 ? end : textEnd) - offset;
+
+        return System.Text.Encoding.UTF8.GetString(data, offset, length);
+    }
+
+    private List<Vector3[]> ReadTree(int root, List<int> materials, List<int[]> triangles)
     {
         var pending = new Stack<int>();
         var nodes = new HashSet<int>();
@@ -148,7 +195,8 @@ internal sealed class PhyFile
             var flags = (uint)Int(ledge + 8);
             var ledgeSize = (long)(flags >> 8) * 16;
 
-            if (triangleCount < 4 || ledgeSize < 16L + (triangleCount * 16))
+            // A triangle of a mesh is stored as a flat convex of its two sides
+            if (triangleCount < 2 || ledgeSize < 16L + (triangleCount * 16))
             {
                 throw Error("invalid convex triangle count or size.");
             }
@@ -157,7 +205,8 @@ internal sealed class PhyFile
 
             var pointBase = Relative(ledge, Int(ledge), 16);
             var points = new List<Vector3>();
-            var indices = new HashSet<ushort>();
+            var pointIndices = new Dictionary<ushort, int>();
+            var convexTriangles = new int[triangleCount * 3];
 
             for (var triangle = 0; triangle < triangleCount; triangle++)
             {
@@ -167,14 +216,22 @@ internal sealed class PhyFile
                 {
                     var vertex = UShort(start + 4 + (edge * 4));
 
-                    if (indices.Add(vertex))
+                    if (!pointIndices.TryGetValue(vertex, out var pointIndex))
                     {
+                        pointIndex = points.Count;
+                        pointIndices.Add(vertex, pointIndex);
                         points.Add(Position(Range((long)pointBase + (vertex * 16L), 16)));
                     }
+
+                    convexTriangles[(triangle * 3) + edge] = pointIndex;
                 }
             }
 
+            // The top byte of the first word of a triangle holds its material, below the virtual flag
+            var firstTriangle = (uint)Int(ledge + 16);
+            materials.Add((int)((firstTriangle >> 24) & 0x7f));
             convexes.Add(points.ToArray());
+            triangles.Add(convexTriangles);
         }
 
         if (convexes.Count == 0)

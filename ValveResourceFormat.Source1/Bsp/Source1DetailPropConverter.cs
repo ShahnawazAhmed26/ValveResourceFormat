@@ -59,8 +59,8 @@ internal static class Source1DetailPropConverter
     /// <summary>Converts the detail props of a map and adds their sprite models to the converted map.</summary>
     /// <param name="map">The converted map, which gets the sprite models and the fade distances of the sprites.</param>
     /// <param name="bsp">The map.</param>
-    /// <param name="locator">Finds the 3D sky area, or null when the map has none.</param>
-    public static Result Convert(Source1ConvertedMap map, BspFile bsp, IBrushLightingLocator? locator)
+    /// <param name="locator">Finds the 3D sky area.</param>
+    public static Result Convert(Source1ConvertedMap map, BspFile bsp, IBrushLightingLocator locator)
     {
         var result = new Result();
         var detailProps = bsp.DetailProps;
@@ -74,7 +74,7 @@ internal static class Source1DetailPropConverter
         var fadeWidth = DefaultFadeWidth;
 
         // The map's detail controller can only shorten the distances, and a missing key counts as 0, which hides all detail props
-        var controller = bsp.Entities.FirstOrDefault(static entity => entity.ClassName == "env_detail_controller");
+        var controller = bsp.FindEntity("env_detail_controller");
 
         if (controller != null)
         {
@@ -97,7 +97,7 @@ internal static class Source1DetailPropConverter
         return result;
     }
 
-    private static void AddSprites(Source1ConvertedMap map, BspFile bsp, IBrushLightingLocator? locator, Result result)
+    private static void AddSprites(Source1ConvertedMap map, BspFile bsp, IBrushLightingLocator locator, Result result)
     {
         var spriteMesh = bsp.DetailProps.BuildSpriteMesh();
 
@@ -106,8 +106,7 @@ internal static class Source1DetailPropConverter
             return;
         }
 
-        var worldspawn = bsp.Entities.FirstOrDefault(static entity => entity.ClassName == "worldspawn");
-        var materialName = worldspawn?.GetString("detailmaterial", BspDetailProps.SpriteMaterial) ?? BspDetailProps.SpriteMaterial;
+        var materialName = bsp.FindEntity("worldspawn")?.GetString("detailmaterial") ?? string.Empty;
 
         if (materialName.Length == 0)
         {
@@ -121,7 +120,7 @@ internal static class Source1DetailPropConverter
         for (var firstVertex = 0; firstVertex + VerticesPerQuad <= vertices.Length; firstVertex += VerticesPerQuad)
         {
             var origin = vertices[firstVertex].PropOrigin;
-            var inSky = locator?.IsInSky(origin) ?? false;
+            var inSky = locator.IsInSky(origin);
             var chunk = meshes.Get(inSky, origin, materialPath);
 
             AddQuad(chunk, vertices.AsSpan(firstVertex, VerticesPerQuad));
@@ -157,7 +156,7 @@ internal static class Source1DetailPropConverter
         chunk.AddQuad(indices[0], indices[1], indices[2], indices[3]);
     }
 
-    private static void AddModels(BspDetailProps detailProps, IBrushLightingLocator? locator, Result result)
+    private static void AddModels(BspDetailProps detailProps, IBrushLightingLocator locator, Result result)
     {
         foreach (var prop in detailProps.Props)
         {
@@ -169,7 +168,7 @@ internal static class Source1DetailPropConverter
             var transform = EntityTransformHelper.ToRigidTransformationMatrix(prop.Angles, prop.Origin);
             var model = new DetailModel(detailProps.ModelDictionary[prop.DetailModel], transform);
 
-            if (locator?.IsInSky(prop.Origin) ?? false)
+            if (locator.IsInSky(prop.Origin))
             {
                 result.SkyModels.Add(model);
             }

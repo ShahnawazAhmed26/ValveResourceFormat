@@ -3,6 +3,7 @@
 #include "unlitgeneric_features.slang"
 #include "common_ps.slang"
 #include "common_envmap_ps.slang"
+#include "common_rendermodes_surface_ps.slang"
 #include "../common/lighting_constants.slang"
 #include "../common/depth.slang"
 
@@ -14,6 +15,7 @@ uniform sampler2D g_tSceneColor; // reserved
 
 uniform int F_BUMPMAP;
 uniform int F_REFRACT;
+uniform int F_NO_FRESNEL;
 uniform vec3 g_vWaterFogColor = vec3(0.1, 0.2, 0.25);
 uniform vec3 g_vRefractTint = vec3(1.0);
 uniform vec4 g_vReflectTint = vec4(1.0);
@@ -36,6 +38,21 @@ float GetDistanceBehindSurface(vec2 screenCoord, vec3 cameraRay)
 float GetWaterFogFactor(float distanceInWater)
 {
     return saturate((distanceInWater - g_flWaterFogStart) / max(g_flWaterFogEnd - g_flWaterFogStart, 1.0));
+}
+
+// The render modes of the surface, which has no color texture so the water fog color stands for the albedo
+void ApplyWaterRenderModes(vec3 geometricNormal, vec3 normal, vec3 tangentNormal, vec3 eyeDirection)
+{
+    if (g_iRenderMode == 0)
+    {
+        return;
+    }
+
+    vec3 tangent = GetSource1TangentFrame(geometricNormal, vec4(0.0), vFragPosition, vTexCoordOut)[0];
+
+    ApplySource1RenderModes(outputColor, g_vWaterFogColor, vec4(1.0), normal, eyeDirection, g_tNormal, vTexCoordOut);
+    ApplySource1NormalRenderModes(outputColor, geometricNormal, tangent, tangentNormal, normal);
+    ApplySource1CubemapRenderMode(outputColor, normal, vFragPosition);
 }
 
 void main()
@@ -78,12 +95,32 @@ void main()
             cheapReflection = max(GetSkyAmbientLighting(reflectionDirection), vec3(0.0));
         }
 
-        float cheapFresnel = pow(1.0 - saturate(facing), 5.0);
-        float reflectionAmount = 0.8 * cheapFresnel + 0.2;
+        // Without a fresnel term the reflection takes the blend factor of the material, kept in the alpha of the tint
+        float cheapFresnel = g_vReflectTint.w;
 
-        vec3 cheapColor = mix(g_vWaterFogColor, cheapReflection * g_vReflectTint.rgb, reflectionAmount);
+        if (F_NO_FRESNEL == 0)
+        {
+            cheapFresnel = pow(1.0 - saturate(facing), 5.0);
+        }
+
+        vec3 cheapColor = cheapReflection * g_vReflectTint.rgb;
+        float cheapAlpha = 1.0;
+
+        if (F_TRANSLUCENT == 0)
+        {
+            // The opaque variant mixes the reflection with the water color
+            cheapColor = mix(g_vWaterFogColor, cheapColor, cheapFresnel);
+        }
+        else
+        {
+            // The blended variant lays the reflection over the scene, more of it with distance
+            float distanceReflection = saturate((length(cameraRay) - g_flCheapWaterStartDistance) / max(g_flCheapWaterEndDistance - g_flCheapWaterStartDistance, 1.0));
+            cheapAlpha = saturate(cheapFresnel + distanceReflection);
+        }
+
         ApplyFog(cheapColor, vFragPosition);
-        outputColor = vec4(cheapColor, g_vReflectTint.w);
+        outputColor = vec4(cheapColor, cheapAlpha);
+        ApplyWaterRenderModes(geometricNormal, normal, tangentNormal, eyeDirection);
         return;
     }
 
@@ -127,4 +164,5 @@ void main()
     vec3 color = mix(refraction, reflection, reflectionAmount);
     ApplyFog(color, vFragPosition);
     outputColor = vec4(color, 1.0);
+    ApplyWaterRenderModes(geometricNormal, normal, tangentNormal, eyeDirection);
 }

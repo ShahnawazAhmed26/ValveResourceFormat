@@ -64,14 +64,14 @@ internal static class Source1RopeConverter
     /// <summary>Converts the ropes of a map and adds their models to the converted map.</summary>
     /// <param name="map">The converted map, which gets the models and the entities that were converted.</param>
     /// <param name="bsp">The map.</param>
-    /// <param name="locator">Finds the 3D sky area, or null when the map has none.</param>
+    /// <param name="locator">Finds the 3D sky area.</param>
     /// <param name="getMaterialInfo">Reads the texture of a material, or returns null when it has none.</param>
     /// <param name="worldParts">Gets the paths of the models of the map.</param>
     /// <param name="skyParts">Gets the paths of the models in the 3D sky box area.</param>
     public static void Convert(
         Source1ConvertedMap map,
         BspFile bsp,
-        IBrushLightingLocator? locator,
+        IBrushLightingLocator locator,
         Func<string, Source1MaterialInfo?> getMaterialInfo,
         List<string> worldParts,
         List<string> skyParts)
@@ -170,7 +170,7 @@ internal static class Source1RopeConverter
     private static bool AddRope(
         Source1BakedMeshSet<RopeVertex> meshes,
         BspLeafAmbient leaves,
-        IBrushLightingLocator? locator,
+        IBrushLightingLocator locator,
         Func<string, Source1MaterialInfo?> getMaterialInfo,
         Rope rope)
     {
@@ -180,17 +180,17 @@ internal static class Source1RopeConverter
         }
 
         var nodes = Settle(rope);
-        var points = Subdivide(nodes, leaves, rope, out var lights);
+        var steps = GetSubdivisionSteps(rope);
+        var points = Subdivide(nodes, steps, leaves, out var lights);
 
         var textureHeight = MathF.Max(info.TextureSize.Y, 1f);
         var pixelsPerUnit = 4f / rope.TextureScale;
         var totalTexCoord = pixelsPerUnit * (rope.Length + rope.Slack + SlackFudge);
-        var subdivisions = rope.IsBarbed ? BarbedSubdivisions.Length : rope.Subdivisions;
-        var pointCount = ((rope.NodeCount - 1) * subdivisions) + 1;
+        var pointCount = ((rope.NodeCount - 1) * steps.Length) + 1;
         var texCoordStep = totalTexCoord / pointCount / textureHeight;
 
         var materialPath = Source1Paths.AddVariant(Source1Paths.ToMaterialPath(rope.MaterialName), Source1ResourceProvider.CableVariant);
-        var inSky = locator?.IsInSky(rope.Start) ?? false;
+        var inSky = locator.IsInSky(rope.Start);
         var chunk = meshes.Get(inSky, rope.Start, materialPath);
         var halfWidth = rope.Width * 0.5f;
         var previous = -1;
@@ -286,9 +286,8 @@ internal static class Source1RopeConverter
     }
 
     // Runs a Catmull-Rom spline through the nodes, and gives each point the light of the nodes around it
-    private static Vector3[] Subdivide(Vector3[] nodes, BspLeafAmbient leaves, Rope rope, out Vector3[] lights)
+    private static Vector3[] Subdivide(Vector3[] nodes, float[] steps, BspLeafAmbient leaves, out Vector3[] lights)
     {
-        var steps = GetSubdivisionSteps(rope);
         var nodeLights = new Vector3[nodes.Length];
 
         for (var i = 0; i < nodes.Length; i++)

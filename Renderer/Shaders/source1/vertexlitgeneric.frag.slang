@@ -4,6 +4,10 @@
 #include "common_ps.slang"
 #include "common_envmap_ps.slang"
 #include "common_model_lighting_ps.slang"
+#include "common_rendermodes_lighting_ps.slang"
+
+// The phong exponent, from 1 at full roughness to 150 at none
+#define renderMode_Roughness 0
 
 in vec3 vFragPosition;
 in vec3 vNormalOut;
@@ -130,7 +134,8 @@ void main()
         albedo = mix(baseColor.rgb, tinted, baseColor.a);
     }
 
-    albedo *= vVertexColorOut.rgb;
+    // The render color and vertex colors are gamma space values
+    albedo *= SrgbGammaToLinear(vVertexColorOut.rgb);
     vec3 color = albedo * diffuseLight;
 
     // The phong shader adds the detail after the self illumination, the others before
@@ -213,4 +218,21 @@ void main()
     float baseAlpha = baseAlphaIsOpacity ? baseColor.a : 1.0;
     float alpha = GetSource1Opacity(baseAlpha, vVertexColorOut.a);
     outputColor = vec4(color, ApplySource1AlphaTest(alpha));
+
+    if (g_iRenderMode != 0)
+    {
+        vec3 tangent = GetSource1TangentFrame(vertexNormal, vTangentOut, vFragPosition, vTexCoordOut)[0];
+        vec3 bumpMap = normalTexel.xyz * 2.0 - 1.0;
+
+        ApplySource1RenderModes(outputColor, albedo, vVertexColorOut, normal, eyeDirection, g_tColor, vTexCoordOut);
+        ApplySource1NormalRenderModes(outputColor, vertexNormal, tangent, bumpMap, normal);
+        ApplySource1LightingRenderModes(outputColor, diffuseLight, specularLight * specularTint);
+        ApplySource1CubemapRenderMode(outputColor, normal, vFragPosition);
+
+        if (g_iRenderMode == renderMode_Roughness)
+        {
+            float roughness = F_PHONG != 0 ? 1.0 - saturate((specularExponent - 1.0) / 149.0) : 1.0;
+            outputColor = vec4(vec3(roughness), 1.0);
+        }
+    }
 }

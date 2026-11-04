@@ -13,7 +13,23 @@ namespace ValveResourceFormat.Source1.Particles;
 /// <param name="OverbrightFactor">Scales the color of the texture.</param>
 /// <param name="AddSelfAmount">The amount of the base texture that is added on top of itself.</param>
 /// <param name="BlendFrames">Whether the frames of an animated sprite fade into each other.</param>
-internal sealed record PcfMaterialInfo(string? Texture, bool Additive, bool BlendOverAlpha, float OverbrightFactor, float AddSelfAmount, bool BlendFrames);
+/// <param name="Mod2X">Whether the material multiplies its color with the destination and doubles it.</param>
+/// <param name="MinSize">The smallest size of a particle, as a fraction of the screen.</param>
+/// <param name="MaxSize">The largest size of a particle, as a fraction of the screen.</param>
+/// <param name="StartFadeSize">The size from which a particle fades out, as a fraction of the screen.</param>
+/// <param name="EndFadeSize">The size at which a particle is fully faded out, as a fraction of the screen.</param>
+internal sealed record PcfMaterialInfo(
+    string? Texture,
+    bool Additive,
+    bool BlendOverAlpha,
+    float OverbrightFactor,
+    float AddSelfAmount,
+    bool BlendFrames,
+    bool Mod2X,
+    float MinSize,
+    float MaxSize,
+    float StartFadeSize,
+    float EndFadeSize);
 
 /// <summary>
 /// Converts a particle system of a <c>.pcf</c> file to the definition a Source 2 particle system runs from, by
@@ -278,7 +294,11 @@ internal sealed class Source1ParticleConverter
                 var startTime = source.GetFloat("emission_start_time");
                 var startTimeMax = source.GetFloat("emission_start_time max", -1f);
 
-                emitter.Add("m_nParticlesToEmit", countMin >= 0 && countMin != count ? RandomFloat(countMin, count) : new KVObject((float)count));
+                // The count is a whole number that includes both ends of the range, so the truncated float needs one more at the top
+                var countLow = Math.Min(count, countMin);
+                var countHigh = Math.Max(count, countMin);
+
+                emitter.Add("m_nParticlesToEmit", countMin >= 0 && countMin != count ? RandomFloat(countLow, countHigh + 1) : new KVObject((float)count));
                 emitter.Add("m_flStartTime", startTimeMax >= 0f && startTimeMax != startTime ? RandomFloat(startTime, startTimeMax) : new KVObject(startTime));
                 emitter.Add("m_nMaxEmittedPerFrame", source.GetInt("maximum emission per frame", -1));
                 return emitter;
@@ -360,6 +380,8 @@ internal sealed class Source1ParticleConverter
                 initializer.Add("m_flTintPerc", source.GetFloat("tint_perc"));
                 initializer.Add("m_nTintCP", source.GetInt("tint control point"));
                 initializer.Add("m_flUpdateThreshold", source.GetFloat("tint update movement threshold", 32f));
+                initializer.Add("m_nTintBlendMode", TintBlendMode(source.GetInt("tint blend mode")));
+                initializer.Add("m_flLightAmplification", source.GetFloat("light amplification amount", 1f));
                 initializer.Add("m_nFieldOutput", source.GetInt("output field", ColorField));
                 return initializer;
             }
@@ -495,7 +517,22 @@ internal sealed class Source1ParticleConverter
                 input.Add("m_nType", "PF_TYPE_PARTICLE_FLOAT");
                 input.Add("m_nScalarAttribute", source.GetInt("input field", 8));
 
-                return RemapInit(source, input, source.GetInt("output field", RadiusField));
+                // With an active range the particle keeps its value when the input is outside the range
+                KVObject? gate = null;
+
+                if (source.GetBool("only active within specified input range"))
+                {
+                    gate = KVObject.Collection();
+                    gate.Add("m_nType", "PF_TYPE_PARTICLE_FLOAT");
+                    gate.Add("m_nScalarAttribute", source.GetInt("input field", 8));
+                    gate.Add("m_nMapType", "PF_MAP_TYPE_NOTCHED");
+                    gate.Add("m_flNotchedRangeMin", source.GetFloat("input minimum"));
+                    gate.Add("m_flNotchedRangeMax", source.GetFloat("input maximum", 1f));
+                    gate.Add("m_flNotchedOutputOutside", 0f);
+                    gate.Add("m_flNotchedOutputInside", 1f);
+                }
+
+                return RemapInit(source, input, source.GetInt("output field", RadiusField), gate);
             }
 
             case "Remap Control Point to Scalar":
@@ -641,6 +678,23 @@ internal sealed class Source1ParticleConverter
         return transform;
     }
 
+    private static string TintBlendMode(int mode)
+    {
+        switch (mode)
+        {
+            case 1:
+                return "PARTICLEBLEND_OVERLAY";
+            case 2:
+                return "PARTICLEBLEND_DARKEN";
+            case 3:
+                return "PARTICLEBLEND_LIGHTEN";
+            case 4:
+                return "PARTICLEBLEND_MULTIPLY";
+            default:
+                return "PARTICLEBLEND_DEFAULT";
+        }
+    }
+
     private static string GetSetMethod(DmxElement source)
     {
         if (source.GetBool("output is scalar of initial random range"))
@@ -657,27 +711,46 @@ internal sealed class Source1ParticleConverter
     }
 
     // The remap is an input of an InitFloat, which only acts while the emitter is within its lifetime window
-    private static KVObject RemapInit(DmxElement source, KVObject input, int outputField)
+    private static KVObject RemapInit(DmxElement source, KVObject input, int outputField, KVObject? activeRangeGate = null)
     {
         var initializer = Function("C_INIT_InitFloat");
+        var setMethod = GetSetMethod(source);
         initializer.Add("m_nOutputField", outputField);
-        initializer.Add("m_nSetMethod", GetSetMethod(source));
+        initializer.Add("m_nSetMethod", setMethod);
+
+        var outputMin = source.GetFloat("output minimum");
+        var outputMax = source.GetFloat("output maximum", 1f);
+
+        // An angle is in radians here, and InitFloat reads the output of a replacing set method in degrees
+        var isAngleField = outputField is RollField or RollSpeedField or YawField;
+
+        if (isAngleField && setMethod == "PARTICLE_SET_REPLACE_VALUE")
+        {
+            outputMin = float.RadiansToDegrees(outputMin);
+            outputMax = float.RadiansToDegrees(outputMax);
+        }
 
         input.Add("m_flInput0", source.GetFloat("input minimum"));
         input.Add("m_flInput1", source.GetFloat("input maximum", 1f));
-        input.Add("m_flOutput0", source.GetFloat("output minimum"));
-        input.Add("m_flOutput1", source.GetFloat("output maximum", 1f));
+        input.Add("m_flOutput0", outputMin);
+        input.Add("m_flOutput1", outputMax);
         input.Add("m_nMapType", "PF_MAP_TYPE_REMAP");
         initializer.Add("m_InputValue", input);
+
+        if (activeRangeGate != null)
+        {
+            initializer.Add("m_InputStrength", activeRangeGate);
+        }
 
         var startTime = source.GetFloat("emitter lifetime start time (seconds)", -1f);
         var endTime = source.GetFloat("emitter lifetime end time (seconds)", -1f);
 
+        // The window applies only when both ends are set
         if (startTime != -1f && startTime == endTime)
         {
             initializer.Add("m_bDisableOperator", true);
         }
-        else if (startTime != -1f || endTime != -1f)
+        else if (startTime != -1f && endTime != -1f)
         {
             var strength = KVObject.Collection();
             strength.Add("m_nType", "PF_TYPE_COLLECTION_AGE");
@@ -812,8 +885,8 @@ internal sealed class Source1ParticleConverter
             {
                 var lockToPoint = Function("C_OP_PositionLock");
                 lockToPoint.Add("m_TransformInput", new KVObject(source.GetInt("control_point_number")));
-                lockToPoint.Add("m_flStartTime_min", source.GetFloat("start_fadeout_min"));
-                lockToPoint.Add("m_flStartTime_max", source.GetFloat("start_fadeout_max"));
+                lockToPoint.Add("m_flStartTime_min", source.GetFloat("start_fadeout_min", 1f));
+                lockToPoint.Add("m_flStartTime_max", source.GetFloat("start_fadeout_max", 1f));
                 lockToPoint.Add("m_flStartTime_exp", source.GetFloat("start_fadeout_exponent", 1f));
                 lockToPoint.Add("m_flEndTime_min", source.GetFloat("end_fadeout_min", 1f));
                 lockToPoint.Add("m_flEndTime_max", source.GetFloat("end_fadeout_max", 1f));
@@ -837,7 +910,7 @@ internal sealed class Source1ParticleConverter
             case "Oscillate Scalar":
             {
                 var oscillate = Function("C_OP_OscillateScalar");
-                oscillate.Add("m_nField", source.GetInt("oscillation field"));
+                oscillate.Add("m_nField", source.GetInt("oscillation field", AlphaField));
                 oscillate.Add("m_RateMin", source.GetFloat("oscillation rate min"));
                 oscillate.Add("m_RateMax", source.GetFloat("oscillation rate max"));
                 oscillate.Add("m_FrequencyMin", source.GetFloat("oscillation frequency min", 1f));
@@ -869,7 +942,7 @@ internal sealed class Source1ParticleConverter
             {
                 var rotate = Function("C_OP_MovementRotateParticleAroundAxis");
                 rotate.Add("m_vecRotAxis", KVHelpers.ToKVArray(source.GetVector3("Rotation Axis", Vector3.UnitZ)));
-                rotate.Add("m_flRotRate", source.GetFloat("Rotation Rate"));
+                rotate.Add("m_flRotRate", source.GetFloat("Rotation Rate", 180f));
                 rotate.Add("m_TransformInput", new KVObject(source.GetInt("Control Point")));
                 rotate.Add("m_bLocalSpace", source.GetBool("Use Local Space"));
                 return rotate;
@@ -951,10 +1024,11 @@ internal sealed class Source1ParticleConverter
             case "Noise Scalar":
             {
                 var noise = Function("C_OP_Noise");
-                noise.Add("m_nFieldOutput", source.GetInt("output field", AlphaField));
+                noise.Add("m_nFieldOutput", source.GetInt("output field", RadiusField));
                 noise.Add("m_flOutputMin", source.GetFloat("output minimum"));
                 noise.Add("m_flOutputMax", source.GetFloat("output maximum", 1f));
                 noise.Add("m_fl4NoiseScale", source.GetFloat("noise coordinate scale", 0.1f));
+                noise.Add("m_bAdditive", source.GetBool("additive"));
                 return noise;
             }
 
@@ -1120,7 +1194,11 @@ internal sealed class Source1ParticleConverter
         {
             var blendMode = "PARTICLE_OUTPUT_BLEND_MODE_ALPHA";
 
-            if (material.BlendOverAlpha)
+            if (material.Mod2X)
+            {
+                blendMode = "PARTICLE_OUTPUT_BLEND_MODE_MOD2X";
+            }
+            else if (material.BlendOverAlpha || material.AddSelfAmount != 0f)
             {
                 blendMode = "PARTICLE_OUTPUT_BLEND_MODE_BLEND_ADD";
             }
@@ -1133,6 +1211,10 @@ internal sealed class Source1ParticleConverter
             renderer.Add("m_flOverbrightFactor", material.OverbrightFactor);
             renderer.Add("m_flAddSelfAmount", material.AddSelfAmount);
             renderer.Add("m_bBlendFramesSeq0", material.BlendFrames);
+            renderer.Add("m_flMinSize", material.MinSize);
+            renderer.Add("m_flMaxSize", material.MaxSize);
+            renderer.Add("m_flStartFadeSize", material.StartFadeSize);
+            renderer.Add("m_flEndFadeSize", material.EndFadeSize);
         }
 
         var visibility = KVObject.Collection();

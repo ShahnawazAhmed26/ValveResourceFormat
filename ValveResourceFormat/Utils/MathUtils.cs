@@ -336,6 +336,22 @@ namespace ValveResourceFormat.Utils
             return Math.Clamp(x, 0.0f, 1.0f);
         }
 
+        /// <summary>
+        /// Converts a value in [0, 1] to the nearest 8-bit unsigned normalized value. Values outside the range are clamped.
+        /// </summary>
+        public static byte ToUnorm8(float x)
+        {
+            return (byte)MathF.Round(Saturate(x) * 255f);
+        }
+
+        /// <summary>
+        /// Rounds a value down to a multiple of 1/255, the steps an 8-bit unsigned normalized value can hold.
+        /// </summary>
+        public static float FloorToUnorm8Step(float x)
+        {
+            return MathF.Floor(x * 255f) / 255f;
+        }
+
         /// <summary>The BT.709-1 weights of the red, green and blue channels in a color's luminance, as the game shaders use them.</summary>
         public static readonly Vector3 LuminanceWeights = new(0.2125f, 0.7154f, 0.0721f);
 

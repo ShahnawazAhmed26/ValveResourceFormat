@@ -42,10 +42,10 @@ internal static class Source1LightConverter
 
         var converted = classname switch
         {
-            "light_environment" => ConvertEnvironment(source, target, options.HdrLighting),
-            "light_spot" => ConvertSpot(source, target, options.HdrLighting),
-            "light_dynamic" => ConvertDynamic(source, target),
-            _ => ConvertOmni(source, target, options.HdrLighting),
+            "light_environment" => ConvertEnvironment(source, target, options),
+            "light_spot" => ConvertSpot(source, target, options),
+            "light_dynamic" => ConvertDynamic(source, target, options.MinLightingValue),
+            _ => ConvertOmni(source, target, options),
         };
 
         ApplySwitchableStyle(source, target);
@@ -75,24 +75,24 @@ internal static class Source1LightConverter
         }
     }
 
-    private static string ConvertOmni(BspEntity source, EntityLump.Entity target, bool useHdr)
+    private static string ConvertOmni(BspEntity source, EntityLump.Entity target, Source1EntityConverterOptions options)
     {
-        WritePointLight(source, target, useHdr);
+        WritePointLight(source, target, options);
 
         return "light_omni";
     }
 
-    private static void WritePointLight(BspEntity source, EntityLump.Entity target, bool useHdr)
+    private static void WritePointLight(BspEntity source, EntityLump.Entity target, Source1EntityConverterOptions options)
     {
-        WriteColor(target, ReadLight(source, "_light", "_lightHDR", "_lightscaleHDR", DefaultSunLight, useHdr));
+        WriteColor(target, ReadLight(source, "_light", "_lightHDR", "_lightscaleHDR", DefaultSunLight, options.HdrLighting));
         WriteFalloff(source, target);
-        WriteAngles(source, target, isDynamicLight: false);
+        WriteBakedLightAngles(source, target, options.TargetOrigins);
         target["castshadows"] = 0L;
     }
 
-    private static string ConvertSpot(BspEntity source, EntityLump.Entity target, bool useHdr)
+    private static string ConvertSpot(BspEntity source, EntityLump.Entity target, Source1EntityConverterOptions options)
     {
-        WritePointLight(source, target, useHdr);
+        WritePointLight(source, target, options);
 
         var inner = source.GetFloat("_inner_cone");
 
@@ -130,16 +130,24 @@ internal static class Source1LightConverter
     }
 
     // A dynamic light is an entity of the game and not a light the map compiler bakes. It has a plain
-    // 8 bit color, a brightness that is an exponent of two, a radius, and is a spot only with an outer cone.
-    private static string ConvertDynamic(BspEntity source, EntityLump.Entity target)
+    // 8 bit color that is already linear, a brightness that is an exponent of two, a radius, and is a spot only with
+    // an outer cone. The game lights a surface at distance d with min(2, m * r^2 / d^2) * (1 - d^2 / r^2) of its
+    // color, where m is the minimum lighting value. That is the inverse square curve of the renderer, which is
+    // 1 / d^2 - 1 / r^2 with the range at the radius, scaled so that it is the same 100 units from the light.
+    private static string ConvertDynamic(BspEntity source, EntityLump.Entity target, float minLightingValue)
     {
-        var color = ReadDynamicColor(source);
+        var (color, colorBrightness) = SplitColor(ReadDynamicColor(source));
         var exponent = source.GetInt("brightness");
+        var radius = source.GetFloat("distance", DefaultDynamicLightDistance);
+        var brightnessAtReference = minLightingValue * radius * radius / (ReferenceDistance * ReferenceDistance);
 
         target["color"] = KVObject.PackedArray([(double)color.X, (double)color.Y, (double)color.Z, 255.0]);
-        target["brightness"] = (double)MathF.Pow(2f, exponent);
+        target["brightness"] = (double)(colorBrightness * MathF.Pow(2f, exponent) * brightnessAtReference);
+        target["attenuation0"] = 0.0;
+        target["attenuation1"] = 0.0;
+        target["attenuation2"] = 1.0;
+        target["range"] = (double)radius;
 
-        WriteDynamicLightFalloff(source, target);
         WriteAngles(source, target, isDynamicLight: true);
         target["castshadows"] = 0L;
 
@@ -180,8 +188,9 @@ internal static class Source1LightConverter
         return MathF.Truncate(value);
     }
 
-    private static string ConvertEnvironment(BspEntity source, EntityLump.Entity target, bool useHdr)
+    private static string ConvertEnvironment(BspEntity source, EntityLump.Entity target, Source1EntityConverterOptions options)
     {
+        var useHdr = options.HdrLighting;
         var sun = ReadLight(source, "_light", "_lightHDR", "_lightscaleHDR", DefaultSunLight, useHdr);
 
         WriteColor(target, sun);
@@ -204,7 +213,7 @@ internal static class Source1LightConverter
         target["castshadows"] = 1L;
         target["range"] = 0.0;
 
-        WriteAngles(source, target, isDynamicLight: false);
+        WriteBakedLightAngles(source, target, options.TargetOrigins);
 
         return "light_environment";
     }
@@ -331,23 +340,22 @@ internal static class Source1LightConverter
                 zeroPercent = 2f * fiftyPercent;
             }
 
-            // 1 / (1 + l*d + q*d^2) is 1/2 at the fifty percent distance and 1/256 at the zero percent distance
-            var determinant = (fiftyPercent * zeroPercent * zeroPercent) - (fiftyPercent * fiftyPercent * zeroPercent);
-            constant = 1f;
-            linear = ((zeroPercent * zeroPercent) - (ReachIntensityRatio - 1f) * fiftyPercent * fiftyPercent) / determinant;
-            quadratic = ((ReachIntensityRatio - 1f) * fiftyPercent - zeroPercent) / determinant;
+            (constant, linear, quadratic) = SolveFiniteFalloff(fiftyPercent, zeroPercent);
 
             // The renderer drops negative terms, so a curve that needs one falls back to the inverse square
             // curve that is 1/2 at the fifty percent distance
             if (linear < 0f || quadratic < 0f)
             {
+                constant = 1f;
                 linear = 0f;
                 quadratic = 1f / (fiftyPercent * fiftyPercent);
             }
 
             // The intensity of the entity is what the light has at the light, not at 100 units
             brightness /= constant + (linear * ReferenceDistance) + (quadratic * ReferenceDistance * ReferenceDistance);
-            range = zeroPercent;
+
+            // The light only ends at the zero percent distance when it is flagged to
+            range = source.GetInt("_hardfalloff") != 0 ? zeroPercent : GetReach(constant, linear, quadratic);
 
             // The renderer zeroes terms below a threshold, which the small terms of a distant light fall under.
             // Scaling all terms keeps the curve, and the renderer divides the brightness by the curve at 100 units
@@ -373,6 +381,37 @@ internal static class Source1LightConverter
         target["attenuation1"] = (double)linear;
         target["attenuation2"] = (double)quadratic;
         target["range"] = (double)range;
+    }
+
+    // The map compiler fits 1 / (c + l*d + q*d^2) through 1 at the light, 1/2 at the fifty percent distance and 1/256
+    // at the zero percent distance. While that curve is not monotonic it lifts the middle point toward the straight
+    // line between the end points, then scales the terms so that the curve is exactly 1/2 at the fifty percent distance.
+    private static (float Constant, float Linear, float Quadratic) SolveFiniteFalloff(float fiftyPercent, float zeroPercent)
+    {
+        const float BlendStep = 0.05f;
+
+        var straightMiddle = 1f + ((ReachIntensityRatio - 1f) * fiftyPercent / zeroPercent);
+        var determinant = fiftyPercent * zeroPercent * (fiftyPercent - zeroPercent);
+        var quadratic = 0f;
+        var linear = 0f;
+
+        for (var blend = 0f; blend <= 1f; blend += BlendStep)
+        {
+            var middle = ((1f - blend) * 2f) + (blend * straightMiddle);
+
+            quadratic = ((zeroPercent * (middle - 1f)) + (fiftyPercent * (1f - ReachIntensityRatio))) / determinant;
+            linear = ((zeroPercent * zeroPercent * (1f - middle)) + (fiftyPercent * fiftyPercent * (ReachIntensityRatio - 1f))) / determinant;
+
+            if ((2f * quadratic) + linear >= 0f)
+            {
+                break;
+            }
+        }
+
+        var atFiftyPercent = 1f + (fiftyPercent * (linear + (fiftyPercent * quadratic)));
+        var scale = 2f / atFiftyPercent;
+
+        return (scale, linear * scale, quadratic * scale);
     }
 
     private static float ClampSmallTerm(float term)
@@ -409,16 +448,6 @@ internal static class Source1LightConverter
         quadratic *= scale;
     }
 
-    private static void WriteDynamicLightFalloff(BspEntity source, EntityLump.Entity target)
-    {
-        var distance = source.GetFloat("distance", DefaultDynamicLightDistance);
-
-        target["attenuation0"] = 1.0;
-        target["attenuation1"] = 0.0;
-        target["attenuation2"] = 0.0;
-        target["range"] = (double)distance;
-    }
-
     // Where the light has fallen to 1/256 of what it is 100 units away, or 0 where it never does
     private static float GetReach(float constant, float linear, float quadratic)
     {
@@ -436,6 +465,22 @@ internal static class Source1LightConverter
         }
 
         return 0f;
+    }
+
+    // The map compiler points a light at the entity its target key names, and only without one along its angles
+    private static void WriteBakedLightAngles(BspEntity source, EntityLump.Entity target, IReadOnlyDictionary<string, Vector3> targetOrigins)
+    {
+        var targetName = source.GetString("target");
+
+        if (targetOrigins.TryGetValue(targetName, out var targetOrigin) && targetOrigin != source.Origin)
+        {
+            var angles = EntityTransformHelper.ForwardDirectionToEulerAngles(targetOrigin - source.Origin);
+
+            target["angles"] = Source1EntityConverter.FormatVector(angles);
+            return;
+        }
+
+        WriteAngles(source, target, isDynamicLight: false);
     }
 
     // The map compiler points a light along its yaw, from the angle key when it has one, and a pitch that is an
@@ -478,6 +523,6 @@ internal static class Source1LightConverter
             }
         }
 
-        target["angles"] = string.Create(CultureInfo.InvariantCulture, $"{angles.X} {angles.Y} {angles.Z}");
+        target["angles"] = Source1EntityConverter.FormatVector(angles);
     }
 }

@@ -2,8 +2,10 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using ValveKeyValue;
 using ValveResourceFormat.Blocks;
+using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
+using ValveResourceFormat.Source1;
 using ValveResourceFormat.Source1.Model;
 using S2Model = ValveResourceFormat.ResourceTypes.Model;
 
@@ -29,6 +31,16 @@ internal static class GoldSrcModelConverter
         public uint BoneWeights;
     }
 
+    private static readonly VertexField[] VertexFields =
+    [
+        new(nameof(ConvertedVertex.Position), "POSITION", 0, DXGI_FORMAT.R32G32B32_FLOAT),
+        new(nameof(ConvertedVertex.Normal), "NORMAL", 0, DXGI_FORMAT.R32G32B32_FLOAT),
+        new(nameof(ConvertedVertex.Tangent), "TANGENT", 0, DXGI_FORMAT.R32G32B32A32_FLOAT),
+        new(nameof(ConvertedVertex.TexCoord), "TEXCOORD", 0, DXGI_FORMAT.R32G32_FLOAT),
+        new(nameof(ConvertedVertex.BoneIndices), "BLENDINDICES", 0, DXGI_FORMAT.R8G8B8A8_UINT),
+        new(nameof(ConvertedVertex.BoneWeights), "BLENDWEIGHT", 0, DXGI_FORMAT.R8G8B8A8_UNORM),
+    ];
+
     private sealed class MeshEntry
     {
         public required GoldSrcMdlSubmodel SubModel { get; init; }
@@ -52,9 +64,8 @@ internal static class GoldSrcModelConverter
         var controlData = KVObject.Collection();
         var control = new BinaryKV3(controlData, KV3IDLookup.Get("generic"), BlockType.CTRL) { Resource = resource };
 
-        var blocks = resource.UnparsedBlocks;
-        blocks.Add(model);
-        blocks.Add(control);
+        resource.AddBlock(model);
+        resource.AddBlock(control);
 
         var meshGroupNames = new List<string>();
         var meshGroupMasks = new List<ulong>();
@@ -98,14 +109,12 @@ internal static class GoldSrcModelConverter
                     meshGroupMasks.Add(groupBit);
 
                     var meshName = string.Create(CultureInfo.InvariantCulture, $"{part.Name}.{subIndex}.{i}");
-                    var dataBlockIndex = blocks.Count;
-                    var vbibBlockIndex = dataBlockIndex + 1;
 
                     var vertices = CreateVertices(entry, boneToModel, textureSource, normalizeTexCoords);
-                    var mesh = new Mesh(BlockType.MDAT) { Resource = resource };
-                    mesh.Data = CreateMeshData(source, name, entry, boneToModel, GetBounds(vertices), textureSource);
-                    blocks.Add(mesh);
-                    blocks.Add(CreateVbib(resource, entry, vertices));
+                    var bounds = Source1VertexBuffers.GetBounds(vertices, vertex => vertex.Position);
+                    var mesh = new Mesh(BlockType.MDAT) { Resource = resource, Data = CreateMeshData(source, name, entry, boneToModel, bounds, textureSource) };
+                    var dataBlockIndex = resource.AddBlock(mesh);
+                    var vbibBlockIndex = resource.AddBlock(CreateVbib(entry, vertices));
 
                     var embedded = KVObject.Collection();
                     embedded.Add("name", meshName);
@@ -268,8 +277,8 @@ internal static class GoldSrcModelConverter
             names.Add(bone.Name);
             parents.Add(bone.Parent);
             flags.Add(0);
-            positions.Add(Source1ModelConverter.ToArray(new Vector3(value[0], value[1], value[2])));
-            rotations.Add(Source1ModelConverter.ToArray(GetRestRotation(bone)));
+            positions.Add(KVHelpers.ToKVArray(new Vector3(value[0], value[1], value[2])));
+            rotations.Add(KVHelpers.ToKVArray(GetRestRotation(bone)));
             scales.Add(1f);
         }
 
@@ -313,7 +322,7 @@ internal static class GoldSrcModelConverter
             }
 
             var group = KVObject.Collection();
-            group.Add("m_name", string.Create(CultureInfo.InvariantCulture, $"skin{skin}"));
+            group.Add("m_name", Source1ModelConverter.GetSkinName(skin));
             group.Add("m_materials", materials);
             groups.Add(group);
         }
@@ -351,15 +360,15 @@ internal static class GoldSrcModelConverter
         drawCalls.Add(drawCall);
 
         var drawBound = KVObject.Collection();
-        drawBound.Add("m_vMinBounds", Source1ModelConverter.ToArray(min));
-        drawBound.Add("m_vMaxBounds", Source1ModelConverter.ToArray(max));
+        drawBound.Add("m_vMinBounds", KVHelpers.ToKVArray(min));
+        drawBound.Add("m_vMaxBounds", KVHelpers.ToKVArray(max));
 
         var drawBounds = KVObject.Array();
         drawBounds.Add(drawBound);
 
         var sceneObject = KVObject.Collection();
-        sceneObject.Add("m_vMinBounds", Source1ModelConverter.ToArray(min));
-        sceneObject.Add("m_vMaxBounds", Source1ModelConverter.ToArray(max));
+        sceneObject.Add("m_vMinBounds", KVHelpers.ToKVArray(min));
+        sceneObject.Add("m_vMaxBounds", KVHelpers.ToKVArray(max));
         sceneObject.Add("m_drawCalls", drawCalls);
         sceneObject.Add("m_drawBounds", drawBounds);
 
@@ -387,25 +396,6 @@ internal static class GoldSrcModelConverter
         data.Add("m_skeleton", skeleton);
 
         return data;
-    }
-
-    private static (Vector3 Min, Vector3 Max) GetBounds(ConvertedVertex[] vertices)
-    {
-        if (vertices.Length == 0)
-        {
-            return (Vector3.Zero, Vector3.Zero);
-        }
-
-        var min = vertices[0].Position;
-        var max = min;
-
-        foreach (var vertex in vertices)
-        {
-            min = Vector3.Min(min, vertex.Position);
-            max = Vector3.Max(max, vertex.Position);
-        }
-
-        return (min, max);
     }
 
     private static ConvertedVertex[] CreateVertices(MeshEntry entry, Matrix4x4[] boneToModel, GoldSrcMdlFile textureSource, bool normalizeTexCoords)
@@ -456,28 +446,9 @@ internal static class GoldSrcModelConverter
         return new Vector2(1f / Math.Max(texture.Width, 1), 1f / Math.Max(texture.Height, 1));
     }
 
-    private static VBIB CreateVbib(Resource resource, MeshEntry entry, ConvertedVertex[] vertices)
+    private static VBIB CreateVbib(MeshEntry entry, ConvertedVertex[] vertices)
     {
         var indices = entry.Source.Indices;
-
-        var vbib = new VBIB { Resource = resource };
-
-        vbib.VertexBuffers.Add(new VBIB.OnDiskBufferData
-        {
-            ElementCount = (uint)vertices.Length,
-            ElementSizeInBytes = (uint)Marshal.SizeOf<ConvertedVertex>(),
-            Data = MemoryMarshal.AsBytes(vertices.AsSpan()).ToArray(),
-            InputLayoutFields =
-            [
-                CreateField("POSITION", DXGI_FORMAT.R32G32B32_FLOAT, nameof(ConvertedVertex.Position)),
-                CreateField("NORMAL", DXGI_FORMAT.R32G32B32_FLOAT, nameof(ConvertedVertex.Normal)),
-                CreateField("TANGENT", DXGI_FORMAT.R32G32B32A32_FLOAT, nameof(ConvertedVertex.Tangent)),
-                CreateField("TEXCOORD", DXGI_FORMAT.R32G32_FLOAT, nameof(ConvertedVertex.TexCoord)),
-                CreateField("BLENDINDICES", DXGI_FORMAT.R8G8B8A8_UINT, nameof(ConvertedVertex.BoneIndices)),
-                CreateField("BLENDWEIGHT", DXGI_FORMAT.R8G8B8A8_UNORM, nameof(ConvertedVertex.BoneWeights)),
-            ],
-        });
-
         var indexData = new ushort[indices.Length];
 
         for (var i = 0; i < indexData.Length; i++)
@@ -485,21 +456,6 @@ internal static class GoldSrcModelConverter
             indexData[i] = (ushort)indices[i];
         }
 
-        vbib.IndexBuffers.Add(new VBIB.OnDiskBufferData
-        {
-            ElementCount = (uint)indexData.Length,
-            ElementSizeInBytes = sizeof(ushort),
-            Data = MemoryMarshal.AsBytes(indexData.AsSpan()).ToArray(),
-            InputLayoutFields = [],
-        });
-
-        return vbib;
-    }
-
-    private static VBIB.RenderInputLayoutField CreateField(string semantic, DXGI_FORMAT format, string fieldName)
-    {
-        var offset = (uint)Marshal.OffsetOf<ConvertedVertex>(fieldName);
-
-        return new VBIB.RenderInputLayoutField(semantic, format, offset);
+        return Source1VertexBuffers.Create(vertices, VertexFields, indexData);
     }
 }

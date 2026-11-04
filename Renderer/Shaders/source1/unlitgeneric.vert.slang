@@ -10,6 +10,14 @@ out vec3 vNormalOut;
 out vec2 vTexCoordOut;
 out vec4 vVertexColorOut;
 
+#if (SOURCE1_TWO_TEXTURE == 1)
+// $texture2transform
+uniform vec4 g_vTexCoord2TransformRow0 = vec4(1.0, 0.0, 0.0, 0.0);
+uniform vec4 g_vTexCoord2TransformRow1 = vec4(0.0, 1.0, 0.0, 0.0);
+
+out vec2 vTexCoord2Out;
+#endif
+
 void main()
 {
     mat3x4 objectToWorld = CalculateSkinTransform();
@@ -19,6 +27,11 @@ void main()
     gl_Position = g_matWorldToProjection * vec4(vFragPosition, 1.0);
 
     vTexCoordOut = GetSource1BaseTexCoord(vTEXCOORD);
+
+#if (SOURCE1_TWO_TEXTURE == 1)
+    vec4 texCoord2 = vec4(vTEXCOORD, 0.0, 1.0);
+    vTexCoord2Out = vec2(dot(g_vTexCoord2TransformRow0, texCoord2), dot(g_vTexCoord2TransformRow1, texCoord2));
+#endif
 
     vVertexColorOut = GetSource1VertexColor();
 }

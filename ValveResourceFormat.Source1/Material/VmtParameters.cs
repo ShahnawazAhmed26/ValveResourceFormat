@@ -8,15 +8,6 @@ namespace ValveResourceFormat.Source1.Material;
 /// </summary>
 internal readonly struct VmtParameters(IReadOnlyDictionary<string, string> values, string path)
 {
-    private enum TransformOperation
-    {
-        Invalid,
-        Center,
-        Scale,
-        Translate,
-        Rotate,
-    }
-
     public string? String(string key, string? fallback = null) => values.TryGetValue(key, out var value) ? value : fallback;
 
     public bool Contains(string key) => values.ContainsKey(key);
@@ -163,67 +154,39 @@ internal readonly struct VmtParameters(IReadOnlyDictionary<string, string> value
                 components[3], components[7], 0, 1);
         }
 
+        // Only the two fixed operation orders are transforms, any other text leaves the texture untransformed
+        Span<float> numbers = stackalloc float[7];
         var remaining = text.AsSpan();
-
-        if (remaining.IsWhiteSpace())
-        {
-            throw Invalid(key, "empty texture transform");
-        }
-
-        Vector2? center = null;
-        var scale = Vector2.One;
-        var translation = Vector2.Zero;
-        var rotation = 0.0f;
-
-        while (!remaining.IsWhiteSpace())
-        {
-            var name = ReadToken(ref remaining);
-            var operation = GetOperation(name);
-            var xToken = ReadToken(ref remaining);
-            var yToken = operation == TransformOperation.Rotate ? default : ReadToken(ref remaining);
-
-            if (operation == TransformOperation.Invalid || xToken.IsEmpty || (operation != TransformOperation.Rotate && yToken.IsEmpty))
-            {
-                throw Invalid(key, $"invalid texture transform operation '{name.ToString().ToLowerInvariant()}'");
-            }
-
-            var x = ParseFloat(xToken, key);
-            var y = operation == TransformOperation.Rotate ? 0 : ParseFloat(yToken, key);
-
-            switch (operation)
-            {
-                case TransformOperation.Center:
-                    center = new Vector2(x, y);
-                    break;
-                case TransformOperation.Scale:
-                    scale = new Vector2(x, y);
-                    break;
-                case TransformOperation.Translate:
-                    translation = new Vector2(x, y);
-                    break;
-                case TransformOperation.Rotate:
-                    rotation = x;
-                    break;
-            }
-        }
-
-        var scaleMatrix = Matrix4x4.CreateScale(new Vector3(scale.X, scale.Y, 1));
-        var rotationMatrix = Matrix4x4.CreateRotationZ(rotation * (MathF.PI / 180f));
         Matrix4x4 matrix;
 
-        if (center is { } origin)
+        if (TryReadCenteredTransform(remaining, numbers))
         {
-            matrix = Matrix4x4.CreateTranslation(new Vector3(-origin.X, -origin.Y, 0))
-                * scaleMatrix
-                * rotationMatrix
-                * Matrix4x4.CreateTranslation(new Vector3(origin.X + translation.X, origin.Y + translation.Y, 0));
+            var center = new Vector3(numbers[0], numbers[1], 0);
+            var translation = new Vector3(numbers[5], numbers[6], 0);
+
+            matrix = Matrix4x4.CreateTranslation(-center)
+                * Matrix4x4.CreateScale(numbers[2], numbers[3], 1)
+                * Matrix4x4.CreateRotationZ(numbers[4] * (MathF.PI / 180f))
+                * Matrix4x4.CreateTranslation(center + translation);
+        }
+        else if (TryReadUncenteredTransform(remaining, numbers))
+        {
+            // The center is implied: the texture is moved by the translation relative to its middle, scaled and rotated, and
+            // the offset that puts the middle back is rotated the opposite way
+            var scaleX = numbers[0];
+            var scaleY = numbers[1];
+            var radians = numbers[4] * (MathF.PI / 180f);
+            var offset = new Vector2(0.5f / (scaleX != 0 ? scaleX : 1f), 0.5f / (scaleY != 0 ? scaleY : 1f));
+            offset = Vector2.Transform(offset, Matrix3x2.CreateRotation(-radians));
+
+            matrix = Matrix4x4.CreateTranslation(offset.X, offset.Y, 0)
+                * Matrix4x4.CreateRotationZ(radians)
+                * Matrix4x4.CreateScale(scaleX, scaleY, 1)
+                * Matrix4x4.CreateTranslation(numbers[2] - 0.5f, numbers[3] - 0.5f, 0);
         }
         else
         {
-            // Without a center the rotation comes first, then the scale, about the origin of the texture
-            matrix = rotationMatrix
-                * scaleMatrix
-                * Matrix4x4.CreateTranslation(new Vector3(translation.X, translation.Y, 0));
+            return Matrix4x4.Identity;
         }
 
         if (!float.IsFinite(matrix.M11) || !float.IsFinite(matrix.M12)
@@ -236,29 +199,41 @@ internal readonly struct VmtParameters(IReadOnlyDictionary<string, string> value
         return matrix;
     }
 
-    private static TransformOperation GetOperation(ReadOnlySpan<char> name)
+    // center x y, scale x y, rotate angle, translate x y
+    private static bool TryReadCenteredTransform(ReadOnlySpan<char> text, Span<float> numbers)
     {
-        if (name.Equals("center", StringComparison.OrdinalIgnoreCase))
+        return TryReadOperation(ref text, "center", numbers[..2])
+            && TryReadOperation(ref text, "scale", numbers[2..4])
+            && TryReadOperation(ref text, "rotate", numbers[4..5])
+            && TryReadOperation(ref text, "translate", numbers[5..7]);
+    }
+
+    // scale x y, translate x y, rotate angle
+    private static bool TryReadUncenteredTransform(ReadOnlySpan<char> text, Span<float> numbers)
+    {
+        return TryReadOperation(ref text, "scale", numbers[..2])
+            && TryReadOperation(ref text, "translate", numbers[2..4])
+            && TryReadOperation(ref text, "rotate", numbers[4..5]);
+    }
+
+    private static bool TryReadOperation(ref ReadOnlySpan<char> text, string name, Span<float> numbers)
+    {
+        if (!ReadToken(ref text).Equals(name, StringComparison.OrdinalIgnoreCase))
         {
-            return TransformOperation.Center;
+            return false;
         }
 
-        if (name.Equals("scale", StringComparison.OrdinalIgnoreCase))
+        for (var i = 0; i < numbers.Length; i++)
         {
-            return TransformOperation.Scale;
+            var token = ReadToken(ref text);
+
+            if (!float.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out numbers[i]))
+            {
+                return false;
+            }
         }
 
-        if (name.Equals("translate", StringComparison.OrdinalIgnoreCase))
-        {
-            return TransformOperation.Translate;
-        }
-
-        if (name.Equals("rotate", StringComparison.OrdinalIgnoreCase))
-        {
-            return TransformOperation.Rotate;
-        }
-
-        return TransformOperation.Invalid;
+        return true;
     }
 
     private static ReadOnlySpan<char> ReadToken(ref ReadOnlySpan<char> text)

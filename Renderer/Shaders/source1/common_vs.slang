@@ -22,17 +22,18 @@ uniform vec4 g_vEnvMapMaskTransformRow1 = vec4(0.0, 1.0, 0.0, 0.0);
     in vec4 vCOLOR;
 #endif
 
-// White unless the shader asks for the vertex color (F_VERTEX_COLOR, rgb) or vertex alpha (F_VERTEX_ALPHA, a)
+// The entity render color and amount, multiplied by the vertex color (F_VERTEX_COLOR, rgb) and vertex alpha
+// (F_VERTEX_ALPHA, a) when the shader asks for them
 vec4 GetSource1VertexColor()
 {
-    vec4 color = vec4(1.0);
+    vec4 color = GetObjectData().vTint;
 
 #if (F_VERTEX_COLOR == 1)
-    color.rgb = vCOLOR.rgb;
+    color.rgb *= vCOLOR.rgb;
 #endif
 
 #if (F_VERTEX_ALPHA == 1)
-    color.a = vCOLOR.a;
+    color.a *= vCOLOR.a;
 #endif
 
     return color;

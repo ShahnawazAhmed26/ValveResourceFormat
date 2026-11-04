@@ -37,6 +37,8 @@ internal sealed partial class MdlFile
     public StudioModel[][] Models { get; }
     public StudioMesh[][][] Meshes { get; }
     public Source1Flex[][][][] MeshFlexes { get; }
+    public Source1Eyeball[][][] Eyeballs { get; }
+    public Source1Mouth? Mouth { get; }
 
     public string[] FlexDescNames { get; }
     public Source1FlexController[] FlexControllers { get; }
@@ -85,7 +87,9 @@ internal sealed partial class MdlFile
         Models = new StudioModel[Hdr.NumBodyParts][];
         Meshes = new StudioMesh[Hdr.NumBodyParts][][];
         MeshFlexes = new Source1Flex[Hdr.NumBodyParts][][][];
+        Eyeballs = new Source1Eyeball[Hdr.NumBodyParts][][];
         ReadBodyParts(data);
+        Mouth = ReadMouth(data);
 
         FlexDescNames = ReadFlexDescNames(data);
         FlexControllers = ReadFlexControllers(data);
@@ -241,6 +245,7 @@ internal sealed partial class MdlFile
             var models = LumpReader<StudioModel>.ReadLumpAt(data, modelsStart, part.NumModels);
             var meshes = new StudioMesh[models.Length][];
             var meshFlexes = new Source1Flex[models.Length][][];
+            Eyeballs[partIndex] = new Source1Eyeball[models.Length][];
 
             for (var modelIndex = 0; modelIndex < models.Length; modelIndex++)
             {
@@ -252,7 +257,10 @@ internal sealed partial class MdlFile
                 meshFlexes[modelIndex] = new Source1Flex[modelMeshes.Length][];
 
                 var eyeballsStart = modelStart + models[modelIndex].EyeBallIndex;
-                ReadEyelids(LumpReader<StudioEyeball>.ReadLumpAt(data, eyeballsStart, models[modelIndex].NumEyeBalls));
+                var eyeballs = LumpReader<StudioEyeball>.ReadLumpAt(data, eyeballsStart, models[modelIndex].NumEyeBalls);
+
+                ReadEyelids(eyeballs);
+                Eyeballs[partIndex][modelIndex] = ConvertEyeballs(eyeballs);
 
                 for (var meshIndex = 0; meshIndex < modelMeshes.Length; meshIndex++)
                 {
@@ -265,6 +273,32 @@ internal sealed partial class MdlFile
             Meshes[partIndex] = meshes;
             MeshFlexes[partIndex] = meshFlexes;
         }
+    }
+
+    private static Source1Eyeball[] ConvertEyeballs(StudioEyeball[] eyeballs)
+    {
+        var result = new Source1Eyeball[eyeballs.Length];
+
+        for (var i = 0; i < result.Length; i++)
+        {
+            var eyeball = eyeballs[i];
+            result[i] = new Source1Eyeball(eyeball.Bone, eyeball.Origin, eyeball.Up, eyeball.Forward, eyeball.ZOffset, eyeball.IrisScale);
+        }
+
+        return result;
+    }
+
+    // The first mouth lights the teeth
+    private Source1Mouth? ReadMouth(byte[] data)
+    {
+        if (Hdr.NumMouths <= 0)
+        {
+            return null;
+        }
+
+        var mouth = LumpReader<StudioMouth>.ReadLumpAt(data, Hdr.MouthOffset, 1)[0];
+
+        return new Source1Mouth(mouth.Bone, mouth.Forward, mouth.FlexDesc);
     }
 
     // Every sub-model has its own copy of the eyeballs, so a lid is kept once

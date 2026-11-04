@@ -177,7 +177,7 @@ static class Source1Content
 
         Mount(vrfGuiContext, fileSystem);
 
-        var converted = Source1ModelConverter.Convert(model, modelPath, path => fileSystem?.Exists(path) ?? false);
+        var converted = Source1ModelConverter.Convert(model, modelPath, fileSystem);
         converted.Resource.FileName = vrfGuiContext.FileName;
 
         return converted.Resource;

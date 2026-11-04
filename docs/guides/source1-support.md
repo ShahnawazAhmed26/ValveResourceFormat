@@ -22,6 +22,7 @@ Source 1 maps, models, materials and textures are converted to Source 2 resource
   - texture, model and pakfile names in UTF-8 or Latin-1
   - pakfile entries (stored, deflate, LZMA)
   - displacements
+  - world and brush entity collision from the physics collision lump, with player and NPC clips, water and displacement collision
   - static props v4 to v11, including 72-byte v7 and v10 entries, and fade distances
   - overlays, water overlays and overlay fades
   - per-face cubemap materials
@@ -43,9 +44,11 @@ Source 1 maps, models, materials and textures are converted to Source 2 resource
   - key and bracket conditions
   - proxies, evaluated once at load: math, sine, ramp, noise, texture scroll and transform, animated texture
 - Shaders:
-  - LightmappedGeneric and WorldVertexTransition: per-texture transforms, `$seamless_scale`, detail blend modes, bump and ssbump lighting, blend modulate
+  - LightmappedGeneric and WorldVertexTransition: per-texture transforms, `$seamless_scale`, detail blend modes, bump and ssbump lighting, blend modulate and masked blending
   - VertexLitGeneric with phong, blend tint, selfillum and envmap
-  - UnlitGeneric
+  - UnlitGeneric and UnlitTwoTexture
+  - Modulate and MonitorScreen
+  - WorldTwoTextureBlend
   - Water (cheap path)
   - Refract
   - Eyes and teeth
@@ -77,10 +80,10 @@ Source 1 maps, models, materials and textures are converted to Source 2 resource
   - game variants: Dark Messiah, Vindictus, Tactical Intervention (encrypted), Zeno Clash static props
   - Xbox 360 and PS3 maps
   - external lump files that replace the game lump
-  - the world lights lump (lights come from entities)
-  - occlusion and brush collision lumps
+  - lumps that are read but not used: world lights (lights come from entities), visibility, occlusion, areas, area portals, clip portal vertices, original faces, face ids, displacement triangle flags, displacement multiblend (CS:GO), map flags, leaf water data, leaf min distance to water
+  - lumps that are not read: leaf faces, displacement lightmap alphas and sample positions, face macro texture info, static prop collision (prop collision, hulls, hull verts, tris, blob), XZip pak file, phys level, overlay system levels, displacement multiblend (Black Mesa)
+  - brushes and brush sides: collision comes from the physics collision lump, so brush entities keep the half unit inset the compiler gives their visible sides, and window and grate contents collide as solid
   - overlay detail levels
-  - displacement multiblend (CS:GO lump 63, Black Mesa lump 61)
   - face lump v2
 - Static props:
   - v12 and v13
@@ -92,8 +95,8 @@ Source 1 maps, models, materials and textures are converted to Source 2 resource
   - VVC
   - `.phz` physics files
   - wrinkle maps, bone flex drivers and flex animation in sequences
-  - eyelids following where the eyes look (they stay as for eyes that look straight ahead)
-  - eyeball shading
+  - eyes looking at a target, so eyelids stay as for eyes that look straight ahead
+  - the mouth flex weight that darkens the teeth (they are lit as for an open mouth)
   - local sequence layers over a blend sequence (they are laid over the blend instead of composed into it, which differs while the sequence cross fades)
   - animation event sounds
   - the illumination position attachment
@@ -117,8 +120,6 @@ Source 1 maps, models, materials and textures are converted to Source 2 resource
   - tree sway
   - alpha to coverage
   - Lightmapped_4WayBlend
-  - UnlitTwoTexture
-  - Modulate
   - SolidEnergy
   - Portal shaders
   - WindowImposter

@@ -12,8 +12,17 @@ internal static class Source1Paths
     private const string MaterialsFolder = "materials/";
     private const char VariantSeparator = '#';
 
+    /// <summary>The extension of a texture file.</summary>
+    public const string TextureExtension = ".vtf";
+
+    /// <summary>The extension of the high dynamic range variant of a texture file.</summary>
+    public const string HdrTextureExtension = ".hdr.vtf";
+
     /// <summary>The path of a texture that is one black pixel, which a surface without a base color reads.</summary>
     public const string BlackTexturePath = "materials/_black.vtf";
+
+    /// <summary>The path of the model Source 2 draws in place of a model that is missing.</summary>
+    public const string ErrorModelPath = "models/dev/error.vmdl";
 
     /// <summary>
     /// Decodes a name stored in a map as UTF-8, or as Latin-1 when the bytes are not valid UTF-8.
@@ -66,7 +75,21 @@ internal static class Source1Paths
     public static string ToTexturePath(string name)
     {
         var path = StripTextureExtension(Normalize(name));
-        return AddMaterialsFolder(path) + ".vtf";
+        return AddMaterialsFolder(path) + TextureExtension;
+    }
+
+    /// <summary>
+    /// Gets the path of the high dynamic range variant of a texture, or the path itself when it is not a plain texture path.
+    /// </summary>
+    public static string ToHdrTexturePath(string path)
+    {
+        if (!path.EndsWith(TextureExtension, StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(HdrTextureExtension, StringComparison.OrdinalIgnoreCase))
+        {
+            return path;
+        }
+
+        return string.Concat(path.AsSpan(0, path.Length - TextureExtension.Length), HdrTextureExtension);
     }
 
     /// <summary>

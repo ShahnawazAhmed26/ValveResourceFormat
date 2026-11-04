@@ -8,7 +8,7 @@ using ValveResourceFormat.Source1.FileSystem;
 
 namespace ValveResourceFormat.Source1.Bsp;
 
-internal sealed class BspFile
+internal sealed partial class BspFile
 {
     public const int HeaderLumpCount = 64;
 
@@ -407,6 +407,20 @@ internal sealed class BspFile
     public BspDetailProps DetailProps => detailProps ??= new BspDetailProps(this);
 
     public IReadOnlyList<BspEntity> Entities => entities ??= BspEntity.Parse(GetLumpData(LumpType.Entities).Span);
+
+    /// <summary>Finds the first entity of a class, such as <c>worldspawn</c>.</summary>
+    internal BspEntity? FindEntity(string className)
+    {
+        foreach (var entity in Entities)
+        {
+            if (entity.ClassName == className)
+            {
+                return entity;
+            }
+        }
+
+        return null;
+    }
 
     public BspGameLump GameLump => gameLump ??= new BspGameLump(this);
     public BspStaticProps StaticProps => staticProps ??= new BspStaticProps(this);

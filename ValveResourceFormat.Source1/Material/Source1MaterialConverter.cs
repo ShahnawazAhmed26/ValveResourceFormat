@@ -1,9 +1,12 @@
+using System.IO;
 using Microsoft.Extensions.Logging;
 using ValveResourceFormat.CompiledShader;
 using ValveResourceFormat.Source1.Entities;
 using ValveResourceFormat.Source1.FileSystem;
 using ValveResourceFormat.Source1.Material.Proxies;
+using ValveResourceFormat.Source1.Model;
 using ValveResourceFormat.Source1.Texture;
+using ValveResourceFormat.Utils;
 
 namespace ValveResourceFormat.Source1.Material;
 
@@ -20,6 +23,7 @@ internal static class Source1MaterialConverter
         ("$bumpmap", "g_tNormal"),
         ("$basetexture2", "g_tColor2"),
         ("$bumpmap2", "g_tNormal2"),
+        ("$texture2", "g_tColor2"),
         ("$envmapmask", "g_tEnvMapMask"),
         ("$selfillummask", "g_tSelfIllumMask"),
         ("$detail", "g_tDetail"),
@@ -61,17 +65,59 @@ internal static class Source1MaterialConverter
         var baseTextureHasAlpha = BaseTextureHasAlpha(fileSystem, vmt);
         var material = ToVrfMaterial(vmt, path, baseTextureHasAlpha);
 
-        ApplySsbumpDetail(fileSystem, material);
+        ApplySsbumpDetail(fileSystem, material, vmt.NormalizedShaderName);
         Source1MaterialProxyApplier.Apply(material, vmt, texturePath => GetFrameCount(fileSystem, texturePath), logger);
         ApplyTextureSampling(fileSystem, material);
         ApplyBlackBaseColor(material);
 
+        if (IsToolsMaterial(vmt))
+        {
+            material.IntAttributes["tools.toolsmaterial"] = 1;
+
+            // Tools materials are looked up by the name their Source 2 counterpart has
+            material.Name = Path.ChangeExtension(path, ".vmat");
+        }
+
         if (highDynamicRange && material.TextureParams.TryGetValue("g_tEnvMap", out var envMapPath))
         {
-            material.TextureParams["g_tEnvMap"] = ToHdrTexturePath(envMapPath);
+            // The provider falls back to the plain cube map when a high dynamic range one does not exist
+            material.TextureParams["g_tEnvMap"] = Source1Paths.ToHdrTexturePath(envMapPath);
         }
 
         return Finish(material, path);
+    }
+
+    // Materials that mark their faces as not drawn by the game, which Source 2 tools materials do too
+    private static readonly string[] ToolsCompileFlags =
+    [
+        "%compiletrigger",
+        "%compilenodraw",
+        "%compileclip",
+        "%playerclip",
+        "%compileplayercontrolclip",
+        "%compilenpcclip",
+        "%compileinvisible",
+        "%compileladder",
+        "%compileskip",
+        "%compilehint",
+        "%compileorigin",
+        "%compilefog",
+        "%compilesky",
+        "%compile2dsky",
+        "%compileblocklos",
+    ];
+
+    internal static bool IsToolsMaterial(VmtFile vmt)
+    {
+        foreach (var flag in ToolsCompileFlags)
+        {
+            if (vmt.Values.Boolean(flag))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -141,6 +187,56 @@ internal static class Source1MaterialConverter
         material.IntAttributes["overlay"] = 1;
 
         return Finish(material, source.Name);
+    }
+
+    /// <summary>
+    /// Copies an eye material so its shader skins the eyeball with the bone the model attaches it to. Other materials are copied as they are.
+    /// </summary>
+    /// <param name="source">The material to copy.</param>
+    /// <param name="eyeball">The eyeball in the space of the converted vertices.</param>
+    internal static Resource AsEyeball(ResourceTypes.Material source, Source1Eyeball eyeball)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        var material = Copy(source, source.ShaderName);
+
+        if (IsShader(source, "eyes") || IsShader(source, "eyerefract"))
+        {
+            material.IntParams["g_nEyeBoneIndex"] = eyeball.Bone;
+            material.VectorParams["g_vEyeBindOrigin"] = new Vector4(eyeball.Origin, 0f);
+            material.VectorParams["g_vEyeBindUp"] = new Vector4(eyeball.Up, 0f);
+            material.VectorParams["g_vEyeBindForward"] = new Vector4(eyeball.Forward, 0f);
+            material.FloatParams["g_flEyeZOffset"] = eyeball.ZOffset;
+            material.FloatParams["g_flEyeIrisScale"] = eyeball.IrisScale;
+        }
+
+        return Finish(material, source.Name);
+    }
+
+    /// <summary>
+    /// Copies a teeth material so its shader lights the teeth from the mouth of the model. Other materials are copied as they are.
+    /// </summary>
+    /// <param name="source">The material to copy.</param>
+    /// <param name="bone">The bone the mouth is attached to.</param>
+    /// <param name="forward">The direction the mouth faces, in the space of the converted vertices.</param>
+    internal static Resource AsTeeth(ResourceTypes.Material source, int bone, Vector3 forward)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        var material = Copy(source, source.ShaderName);
+
+        if (IsShader(source, "teeth"))
+        {
+            material.IntParams["g_nMouthBoneIndex"] = bone;
+            material.VectorParams["g_vMouthBindForward"] = new Vector4(forward, 0f);
+        }
+
+        return Finish(material, source.Name);
+    }
+
+    private static bool IsShader(ResourceTypes.Material material, string shader)
+    {
+        return material.ShaderName == ResourceTypes.Material.Source1ShaderPrefix + shader;
     }
 
     private static ResourceTypes.Material Copy(ResourceTypes.Material source, string shaderName)
@@ -328,15 +424,62 @@ internal static class Source1MaterialConverter
         };
 
         var shader = vmt.NormalizedShaderName;
+
+        SetTextures(material, values, shader);
+
+        var features = ResolveFeatures(material, values, shader, baseTextureHasAlpha);
+
+        if (!features.HasEnvmapMask)
+        {
+            material.TextureParams.Remove("g_tEnvMapMask");
+        }
+
+        if (!features.HasBump)
+        {
+            material.TextureParams.Remove("g_tNormal2");
+        }
+
+        if (features.Envmap is { } envmap && !envmap.Equals("env_cubemap", StringComparison.OrdinalIgnoreCase))
+        {
+            SetTexture(material, "g_tEnvMap", envmap);
+        }
+
+        SetSurfaceFlags(material, values, shader, features);
+        SetEnvmap(material, values, shader, features);
+        SetSelfIllum(material, values, features);
+        SetPhong(material, values, features);
+        SetInfected(material, values, shader);
+        SetEyeRefract(material, values, shader);
+        SetWater(material, values, shader);
+        SetModulate(material, values, shader);
+        SetMonitorScreen(material, values, shader);
+        SetAlpha(material, values, shader);
+        SetTextureFlags(material, features);
+        SetDetail(material, values, shader, features);
+        SetColorTint(material, values, shader);
+        SetTransforms(material, values, shader, features);
+
+        return material;
+    }
+
+    private static void SetTextures(ResourceTypes.Material material, VmtParameters values, string shader)
+    {
         var isWater = IsWater(shader);
-        var isLightmapped = IsLightmapped(shader);
-        var isVertexLit = IsVertexLit(shader);
-        var isUnlit = shader is "unlitgeneric";
 
         // The ripples of water come from the normal map, a $bumpmap of water is the du/dv map of older hardware
         if (isWater && values.String("$normalmap") is { } normalMap && !string.IsNullOrWhiteSpace(normalMap))
         {
             SetTexture(material, "g_tNormal", normalMap);
+        }
+
+        // A bump mapped surface lit by its bumped lightmaps takes the albedo texture, which has no baked light, as its base texture
+        if (shader == "worldtwotextureblend"
+            && values.Contains("$bumpmap")
+            && !values.Boolean("$nodiffusebumplighting")
+            && values.String("$albedo") is { } albedo
+            && !string.IsNullOrWhiteSpace(albedo))
+        {
+            SetTexture(material, "g_tColor", albedo);
         }
 
         foreach (var (key, parameter) in TextureMap)
@@ -355,13 +498,23 @@ internal static class Source1MaterialConverter
 
             SetTexture(material, parameter, path);
         }
+    }
+
+    // Decides which of the optional features of the shader the textures and parameters of the material turn on, as the
+    // shaders combine them
+    private static SurfaceFeatures ResolveFeatures(ResourceTypes.Material material, VmtParameters values, string shader, bool baseTextureHasAlpha)
+    {
+        var isLightmapped = IsLightmapped(shader);
+        var isVertexLit = IsVertexLit(shader);
+        var isUnlit = shader is "unlitgeneric";
 
         var hasBaseTexture = material.TextureParams.ContainsKey("g_tColor");
         var hasBump = material.TextureParams.ContainsKey("g_tNormal");
         var hasLightWarp = material.TextureParams.ContainsKey("g_tLightWarp");
         var hasDetail = material.TextureParams.ContainsKey("g_tDetail");
         var hasEnvmapMask = material.TextureParams.ContainsKey("g_tEnvMapMask");
-        var hasSelfIllumMask = material.TextureParams.ContainsKey("g_tSelfIllumMask");
+        // The lightmapped shaders have no sampler for a self illumination mask
+        var hasSelfIllumMask = material.TextureParams.ContainsKey("g_tSelfIllumMask") && !isLightmapped;
 
         // Phong needs a bump map, the base alpha as its mask or a light warp texture. The infected shader takes its mask
         // from the variation texture.
@@ -428,6 +581,15 @@ internal static class Source1MaterialConverter
             hasEnvmapMask = false;
         }
 
+        // The shader has no environment map and no fresnel term
+        if (shader == "worldtwotextureblend")
+        {
+            hasEnvmap = false;
+            hasEnvmapMask = false;
+            baseAlphaEnvmapMask = false;
+            wantsSelfIllumFresnel = false;
+        }
+
         // An unlit surface has no normal map to take a mask from
         if (isUnlit)
         {
@@ -455,33 +617,66 @@ internal static class Source1MaterialConverter
             normalMapAlphaEnvmapMask = false;
         }
 
-        if (!hasEnvmapMask)
-        {
-            material.TextureParams.Remove("g_tEnvMapMask");
-        }
+        return new SurfaceFeatures(
+            hasEnvmap ? envmap : null,
+            phong,
+            basemapAlphaPhongMask,
+            hasBump,
+            hasEnvmapMask,
+            hasSelfIllumMask,
+            hasDetail,
+            selfIllum,
+            selfIllumFromMask,
+            selfIllumFresnel,
+            baseAlphaEnvmapMask,
+            normalMapAlphaEnvmapMask,
+            useLightWarp);
+    }
 
-        if (!hasBump)
-        {
-            material.TextureParams.Remove("g_tNormal2");
-        }
-
-        if (hasEnvmap && !envmap!.Equals("env_cubemap", StringComparison.OrdinalIgnoreCase))
-        {
-            SetTexture(material, "g_tEnvMap", envmap);
-        }
+    private static void SetSurfaceFlags(ResourceTypes.Material material, VmtParameters values, string shader, SurfaceFeatures features)
+    {
+        var isVertexLit = IsVertexLit(shader);
+        var hasBump = features.HasBump;
 
         // A surface that uses the alpha of its base texture for something else is not alpha tested
-        var alphaTest = values.Boolean("$alphatest") && (phong || !(selfIllum || baseAlphaEnvmapMask));
+        var alphaTest = values.Boolean("$alphatest") && (features.Phong || !(features.SelfIllum || features.BaseAlphaEnvmapMask));
 
         SetFlag(material, "F_ALPHA_TEST", alphaTest);
-        SetFlag(material, "F_TRANSLUCENT", values.Boolean("$translucent") || (isWater && shader != "refract"));
+        bool translucent;
+
+        if (shader == "refract")
+        {
+            // The alpha of the normal map is the translucency, unless an environment map takes it as the reflection amount
+            translucent = hasBump && !features.HasEnvmap;
+        }
+        else if (IsWater(shader))
+        {
+            // Cheap water that is not forced draws its reflection over the scene
+            translucent = !values.Boolean("$forcecheap");
+        }
+        else
+        {
+            translucent = values.Boolean("$translucent");
+        }
+
+        SetFlag(material, "F_TRANSLUCENT", translucent);
         SetFlag(material, "F_ADDITIVE_BLEND", values.Boolean("$additive"));
         SetFlag(material, "F_RENDER_BACKFACES", values.Boolean("$nocull"));
 
         // Models are lit by their vertices and ignore the vertex colors of the mesh
-        SetFlag(material, "F_VERTEX_COLOR", !isVertexLit && values.Boolean("$vertexcolor"));
-        SetFlag(material, "F_VERTEX_ALPHA", !isVertexLit && values.Boolean("$vertexalpha"));
-        SetFlag(material, "F_SELF_ILLUM", selfIllum);
+        var vertexColor = values.Boolean("$vertexcolor");
+        var vertexAlpha = values.Boolean("$vertexalpha");
+
+        // The modulate shader takes the vertex color and alpha together
+        if (shader == "modulate")
+        {
+            vertexColor |= vertexAlpha;
+            vertexAlpha = vertexColor;
+        }
+
+        SetFlag(material, "F_VERTEX_COLOR", !isVertexLit && vertexColor);
+        SetFlag(material, "F_VERTEX_ALPHA", !isVertexLit && vertexAlpha);
+        SetFlag(material, "F_SELF_ILLUM", features.SelfIllum);
 
         // Meshes of models can have flexes, which reach the shader as morphs
         SetFlag(material, "F_MORPH_SUPPORTED", isVertexLit);
@@ -490,49 +685,69 @@ internal static class Source1MaterialConverter
         SetFlag(material, "F_BUMPMAP2", hasBump && material.TextureParams.ContainsKey("g_tNormal2"));
         SetFlag(material, "F_SSBUMP", hasBump && values.Boolean("$ssbump"));
 
-        SetFlag(material, "F_ENVMAP", hasEnvmap);
-        SetFlag(material, "F_ENVMAP_SCENE", hasEnvmap && !material.TextureParams.ContainsKey("g_tEnvMap"));
-        SetFlag(material, "F_ENVMAP_MASK", hasEnvmapMask);
-        SetFlag(material, "F_BASE_ALPHA_ENVMAP_MASK", baseAlphaEnvmapMask);
-        SetFlag(material, "F_NORMALMAP_ALPHA_ENVMAP_MASK", normalMapAlphaEnvmapMask);
+        var isLightmapped = IsLightmapped(shader);
+        SetFlag(material, "F_MASKED_BLENDING", isLightmapped && values.Boolean("$maskedblending"));
+        SetFlag(material, "F_BASE_TEXTURE_NO_ENVMAP", isLightmapped && values.Boolean("$basetexturenoenvmap"));
+        SetFlag(material, "F_BASE_TEXTURE2_NO_ENVMAP", isLightmapped && values.Boolean("$basetexture2noenvmap"));
 
-        if (hasEnvmap)
+        SetFlag(material, "F_ENVMAP", features.HasEnvmap);
+        SetFlag(material, "F_ENVMAP_SCENE", features.HasEnvmap && !material.TextureParams.ContainsKey("g_tEnvMap"));
+        SetFlag(material, "F_ENVMAP_MASK", features.HasEnvmapMask);
+        SetFlag(material, "F_BASE_ALPHA_ENVMAP_MASK", features.BaseAlphaEnvmapMask);
+        SetFlag(material, "F_NORMALMAP_ALPHA_ENVMAP_MASK", features.NormalMapAlphaEnvmapMask);
+    }
+
+    private static void SetEnvmap(ResourceTypes.Material material, VmtParameters values, string shader, SurfaceFeatures features)
+    {
+        if (!features.HasEnvmap)
         {
-            var contrast = values.Float("$envmapcontrast", 0f);
-            var saturation = values.Float("$envmapsaturation", 1f);
-            var fresnelReflection = values.Float("$fresnelreflection", 1f);
-
-            // The lightmapped shader only reads the contrast and the saturation when both change the reflection or when
-            // the fresnel or a self illumination tint needs its slower variant. Otherwise it uses its fixed ones.
-            if (isLightmapped)
-            {
-                var changesContrast = contrast != 0f && contrast != 1f && saturation != 1f;
-                var hasSelfIllumTint = selfIllum && values.Vector("$selfillumtint", Vector3.One) != Vector3.One;
-
-                if (!changesContrast && fresnelReflection == 1f && !hasSelfIllumTint)
-                {
-                    contrast = contrast == 1f ? 1f : 0f;
-                    saturation = 1f;
-                }
-            }
-
-            var envMapTint = values.Vector("$envmaptint", Vector3.One);
-            material.VectorParams["g_vEnvMapTint"] = new Vector4(ConvertTint("$envmaptint", envMapTint, shader), 1f);
-            material.FloatParams["g_flEnvMapContrast"] = contrast;
-            material.FloatParams["g_flEnvMapSaturation"] = saturation;
-            material.FloatParams["g_flEnvMapFresnel"] = values.Float("$envmapfresnel", 0f);
-            material.FloatParams["g_flFresnelReflection"] = fresnelReflection;
+            return;
         }
 
-        SetFlag(material, "F_SELF_ILLUM_ENVMAPMASK_ALPHA", selfIllumFromMask);
-        SetFlag(material, "F_SELF_ILLUM_FRESNEL", selfIllumFresnel);
+        var contrast = values.Float("$envmapcontrast", 0f);
+        var saturation = values.Float("$envmapsaturation", 1f);
+        var fresnelReflection = values.Float("$fresnelreflection", 1f);
 
-        if (selfIllum || selfIllumFromMask)
+        // The lightmapped shader only reads the contrast and the saturation when both change the reflection or when
+        // the fresnel or a self illumination tint needs its slower variant. Otherwise it uses its fixed ones.
+        if (IsLightmapped(shader))
+        {
+            var changesContrast = contrast != 0f && contrast != 1f && saturation != 1f;
+            var hasSelfIllumTint = features.SelfIllum && values.Vector("$selfillumtint", Vector3.One) != Vector3.One;
+
+            if (!changesContrast && fresnelReflection == 1f && !hasSelfIllumTint)
+            {
+                contrast = contrast == 1f ? 1f : 0f;
+                saturation = 1f;
+            }
+
+            // The variant with a blend modulate texture has no contrast and saturation
+            if (material.TextureParams.ContainsKey("g_tBlendModulate"))
+            {
+                contrast = 0f;
+                saturation = 1f;
+            }
+        }
+
+        var envMapTint = values.Vector("$envmaptint", Vector3.One);
+        material.VectorParams["g_vEnvMapTint"] = new Vector4(ConvertTint("$envmaptint", envMapTint, shader), 1f);
+        material.FloatParams["g_flEnvMapContrast"] = contrast;
+        material.FloatParams["g_flEnvMapSaturation"] = saturation;
+        material.FloatParams["g_flEnvMapFresnel"] = values.Float("$envmapfresnel", 0f);
+        material.FloatParams["g_flFresnelReflection"] = fresnelReflection;
+    }
+
+    private static void SetSelfIllum(ResourceTypes.Material material, VmtParameters values, SurfaceFeatures features)
+    {
+        SetFlag(material, "F_SELF_ILLUM_ENVMAPMASK_ALPHA", features.SelfIllumFromMask);
+        SetFlag(material, "F_SELF_ILLUM_FRESNEL", features.SelfIllumFresnel);
+
+        if (features.SelfIllum || features.SelfIllumFromMask)
         {
             material.VectorParams["g_vSelfIllumTint"] = new Vector4(values.Vector("$selfillumtint", Vector3.One), 1f);
         }
 
-        if (selfIllumFresnel)
+        if (features.SelfIllumFresnel)
         {
             var minMaxExp = values.Vector("$selfillumfresnelminmaxexp", new Vector3(0f, 1f, 1f));
             var bias = minMaxExp.Y != 0f ? minMaxExp.X / minMaxExp.Y : 0f;
@@ -540,8 +755,13 @@ internal static class Source1MaterialConverter
             // Scale, bias, exponent and brightness
             material.VectorParams["g_vSelfIllumFresnel"] = new Vector4(1f - bias, bias, minMaxExp.Z, minMaxExp.Y);
         }
+    }
 
-        SetFlag(material, "F_LIGHTWARP", useLightWarp);
+    private static void SetPhong(ResourceTypes.Material material, VmtParameters values, SurfaceFeatures features)
+    {
+        var phong = features.Phong;
+
+        SetFlag(material, "F_LIGHTWARP", features.UseLightWarp);
         SetFlag(material, "F_HALF_LAMBERT", phong || values.Boolean("$halflambert"));
         SetFlag(material, "F_PHONG", phong);
 
@@ -551,7 +771,7 @@ internal static class Source1MaterialConverter
 
             SetFlag(material, "F_PHONG_EXPONENT_TEXTURE", hasExponentTexture);
             SetFlag(material, "F_PHONG_WARP", material.TextureParams.ContainsKey("g_tPhongWarp"));
-            SetFlag(material, "F_BASEMAP_ALPHA_PHONG_MASK", basemapAlphaPhongMask);
+            SetFlag(material, "F_BASEMAP_ALPHA_PHONG_MASK", features.BasemapAlphaPhongMask);
             SetFlag(material, "F_INVERT_PHONG_MASK", values.Boolean("$invertphongmask"));
 
             material.FloatParams["g_flPhongExponent"] = values.Float("$phongexponent", 0f);
@@ -582,55 +802,98 @@ internal static class Source1MaterialConverter
             material.FloatParams["g_flRimLightExponent"] = MathF.Max(values.Float("$rimlightexponent", 4f), 1f);
             material.FloatParams["g_flRimLightBoost"] = values.Float("$rimlightboost", 1f);
         }
+    }
 
-        if (shader == "infected")
+    private static void SetInfected(ResourceTypes.Material material, VmtParameters values, string shader)
+    {
+        if (shader != "infected")
         {
-            var disableVariation = values.Boolean("$disablevariation") || !material.TextureParams.ContainsKey("g_tGradient");
-
-            SetFlag(material, "F_DISABLE_VARIATION", disableVariation);
-            SetFlag(material, "F_BURNING", !disableVariation && values.Boolean("$burning") && material.TextureParams.ContainsKey("g_tBurnDetail"));
-
-            material.IntParams["g_nSheetIndex"] = values.Integer("$sheetindex", 0);
-            material.FloatParams["g_flSkinTintGradient"] = values.Float("$skintintgradient", 0f);
-            material.FloatParams["g_flColorTintGradient"] = values.Float("$colortintgradient", 0f);
-            material.FloatParams["g_flDefaultPhongExponent"] = values.Float("$defaultphongexponent", 5f);
-            material.FloatParams["g_flSkinPhongExponent"] = values.Float("$skinphongexponent", 5f);
-            material.FloatParams["g_flBloodPhongExponent"] = values.Float("$bloodphongexponent", 5f);
-            material.FloatParams["g_flBurnStrength"] = values.Float("$burnstrength", 0f);
-            material.VectorParams["g_vBloodColor"] = new Vector4(values.Vector("$bloodcolor", new Vector3(1f, 0f, 0f)), 0f);
-
-            var bloodMaskRange = values.Vector("$bloodmaskrange", new Vector3(0f, 1f, 0f));
-            material.VectorParams["g_vBloodMaskRange"] = new Vector4(bloodMaskRange.X, bloodMaskRange.Y, 0f, 0f);
+            return;
         }
 
-        if (shader == "eyerefract")
-        {
-            SetFlag(material, "F_RAYTRACE_SPHERE", values.Boolean("$raytracesphere", true));
-            SetFlag(material, "F_SPHERE_TEXKILL", values.Boolean("$spheretexkillcombo", true));
+        var disableVariation = values.Boolean("$disablevariation") || !material.TextureParams.ContainsKey("g_tGradient");
 
-            material.FloatParams["g_flDilation"] = values.Float("$dilation", 0.5f);
-            material.FloatParams["g_flGlossiness"] = values.Float("$glossiness", 1f);
-            material.FloatParams["g_flCorneaBumpStrength"] = values.Float("$corneabumpstrength", 1f);
-            material.FloatParams["g_flParallaxStrength"] = values.Float("$parallaxstrength", 0.25f);
-            material.FloatParams["g_flEyeballRadius"] = values.Float("$eyeballradius", 0.5f);
-            material.VectorParams["g_vAmbientOcclColor"] = new Vector4(values.Vector("$ambientocclcolor", new Vector3(0.33f)), 0f);
+        SetFlag(material, "F_DISABLE_VARIATION", disableVariation);
+        SetFlag(material, "F_BURNING", !disableVariation && values.Boolean("$burning") && material.TextureParams.ContainsKey("g_tBurnDetail"));
+
+        material.IntParams["g_nSheetIndex"] = values.Integer("$sheetindex", 0);
+        material.FloatParams["g_flSkinTintGradient"] = values.Float("$skintintgradient", 0f);
+        material.FloatParams["g_flColorTintGradient"] = values.Float("$colortintgradient", 0f);
+        material.FloatParams["g_flDefaultPhongExponent"] = values.Float("$defaultphongexponent", 5f);
+        material.FloatParams["g_flSkinPhongExponent"] = values.Float("$skinphongexponent", 5f);
+        material.FloatParams["g_flBloodPhongExponent"] = values.Float("$bloodphongexponent", 5f);
+        material.FloatParams["g_flBurnStrength"] = values.Float("$burnstrength", 0f);
+        material.VectorParams["g_vBloodColor"] = new Vector4(values.Vector("$bloodcolor", new Vector3(1f, 0f, 0f)), 0f);
+
+        var bloodMaskRange = values.Vector("$bloodmaskrange", new Vector3(0f, 1f, 0f));
+        material.VectorParams["g_vBloodMaskRange"] = new Vector4(bloodMaskRange.X, bloodMaskRange.Y, 0f, 0f);
+    }
+
+    private static void SetEyeRefract(ResourceTypes.Material material, VmtParameters values, string shader)
+    {
+        if (shader != "eyerefract")
+        {
+            return;
         }
 
-        if (isWater)
+        SetFlag(material, "F_RAYTRACE_SPHERE", values.Boolean("$raytracesphere", true));
+        SetFlag(material, "F_SPHERE_TEXKILL", values.Boolean("$spheretexkillcombo", true));
+
+        material.FloatParams["g_flDilation"] = values.Float("$dilation", 0.5f);
+        material.FloatParams["g_flGlossiness"] = values.Float("$glossiness", 1f);
+        material.FloatParams["g_flCorneaBumpStrength"] = values.Float("$corneabumpstrength", 1f);
+        material.FloatParams["g_flParallaxStrength"] = values.Float("$parallaxstrength", 0.25f);
+        material.FloatParams["g_flEyeballRadius"] = values.Float("$eyeballradius", 0.5f);
+        material.VectorParams["g_vAmbientOcclColor"] = new Vector4(values.Vector("$ambientocclcolor", new Vector3(0.33f)), 0f);
+    }
+
+    private static void SetModulate(ResourceTypes.Material material, VmtParameters values, string shader)
+    {
+        if (shader != "modulate")
         {
-            var fogColor = values.Vector("$fogcolor", new Vector3(0.1f, 0.2f, 0.25f));
-            material.VectorParams["g_vWaterFogColor"] = new Vector4(ConvertTint("$fogcolor", fogColor, shader), 1f);
-            material.VectorParams["g_vRefractTint"] = new Vector4(ConvertTint("$refracttint", values.Vector("$refracttint", Vector3.One), shader), 1f);
-            material.VectorParams["g_vReflectTint"] = new Vector4(ConvertTint("$reflecttint", values.Vector("$reflecttint", Vector3.One), shader), 1f);
-            material.FloatParams["g_flRefractAmount"] = values.Float("$refractamount", 0f);
-            material.FloatParams["g_flWaterFogStart"] = values.Float("$fogstart", 0f);
-            material.FloatParams["g_flWaterFogEnd"] = values.Float("$fogend", 0f);
-            material.FloatParams["g_flCheapWaterStartDistance"] = values.Float("$cheapwaterstartdistance", 500f);
-            material.FloatParams["g_flCheapWaterEndDistance"] = values.Float("$cheapwaterenddistance", 1000f);
-            SetFlag(material, "F_REFRACT", values.Contains("$refracttexture") && !values.Boolean("$forcecheap"));
-            SetFlag(material, "F_FADE_OUT_ON_SILHOUETTE", values.Boolean("$fadeoutonsilhouette"));
+            return;
         }
 
+        SetFlag(material, "F_MOD2X", values.Boolean("$mod2x"));
+        SetFlag(material, "F_WRITE_Z", values.Boolean("$writez"));
+    }
+
+    private static void SetMonitorScreen(ResourceTypes.Material material, VmtParameters values, string shader)
+    {
+        if (shader != "monitorscreen")
+        {
+            return;
+        }
+
+        material.FloatParams["g_flMonitorContrast"] = values.Float("$contrast", 0f);
+        material.FloatParams["g_flMonitorSaturation"] = values.Float("$saturation", 1f);
+        material.VectorParams["g_vMonitorTint"] = new Vector4(values.Vector("$tint", Vector3.One), 1f);
+    }
+
+    private static void SetWater(ResourceTypes.Material material, VmtParameters values, string shader)
+    {
+        if (!IsWater(shader))
+        {
+            return;
+        }
+
+        var fogColor = values.Vector("$fogcolor", new Vector3(0.1f, 0.2f, 0.25f));
+        material.VectorParams["g_vWaterFogColor"] = new Vector4(ConvertTint("$fogcolor", fogColor, shader), 1f);
+        material.VectorParams["g_vRefractTint"] = new Vector4(ConvertTint("$refracttint", values.Vector("$refracttint", Vector3.One), shader), 1f);
+        var reflectTint = ConvertTint("$reflecttint", values.Vector("$reflecttint", Vector3.One), shader);
+        material.VectorParams["g_vReflectTint"] = new Vector4(reflectTint, values.Float("$reflectblendfactor", 1f));
+        SetFlag(material, "F_NO_FRESNEL", values.Boolean("$nofresnel"));
+        material.FloatParams["g_flRefractAmount"] = values.Float("$refractamount", 0f);
+        material.FloatParams["g_flWaterFogStart"] = values.Float("$fogstart", 0f);
+        material.FloatParams["g_flWaterFogEnd"] = values.Float("$fogend", 0f);
+        material.FloatParams["g_flCheapWaterStartDistance"] = values.Float("$cheapwaterstartdistance", 500f);
+        material.FloatParams["g_flCheapWaterEndDistance"] = values.Float("$cheapwaterenddistance", 1000f);
+        SetFlag(material, "F_REFRACT", values.Contains("$refracttexture") && !values.Boolean("$forcecheap"));
+        SetFlag(material, "F_FADE_OUT_ON_SILHOUETTE", values.Boolean("$fadeoutonsilhouette"));
+    }
+
+    private static void SetAlpha(ResourceTypes.Material material, VmtParameters values, string shader)
+    {
         // Without a positive reference the alpha test uses the default of the render state, then the reference is quantized to 8 bits
         var alphaTestReference = values.Float("$alphatestreference", 0f);
 
@@ -639,24 +902,45 @@ internal static class Source1MaterialConverter
             alphaTestReference = DefaultAlphaTestReference;
         }
 
-        material.FloatParams["g_flAlphaTestReference"] = MathF.Floor(alphaTestReference * 255f) / 255f;
+        material.FloatParams["g_flAlphaTestReference"] = MathUtils.FloorToUnorm8Step(alphaTestReference);
         var opacity = values.Float("$alpha", 1f);
         material.FloatParams["g_flOpacityScale"] = ConvertOpacity(opacity, shader);
+    }
 
+    private static void SetTextureFlags(ResourceTypes.Material material, SurfaceFeatures features)
+    {
         SetFlag(material, "F_BASE_TEXTURE2", material.TextureParams.ContainsKey("g_tColor2"));
         SetFlag(material, "F_BLEND_MODULATE", material.TextureParams.ContainsKey("g_tBlendModulate"));
-        SetFlag(material, "F_SELF_ILLUM_MASK", selfIllum && hasSelfIllumMask);
-        SetFlag(material, "F_DETAIL", hasDetail);
+        SetFlag(material, "F_SELF_ILLUM_MASK", features.SelfIllum && features.HasSelfIllumMask);
+        SetFlag(material, "F_DETAIL", features.HasDetail);
+    }
 
-        if (hasDetail)
+    private static void SetDetail(ResourceTypes.Material material, VmtParameters values, string shader, SurfaceFeatures features)
+    {
+        if (!features.HasDetail)
         {
-            material.FloatParams["g_flDetailScale"] = values.Float("$detailscale", 4f);
-            material.FloatParams["g_flDetailBlendFactor"] = values.Float("$detailblendfactor", 1f);
-            var detailTint = values.Vector("$detailtint", Vector3.One);
-            material.VectorParams["g_vDetailTint"] = new Vector4(ConvertTint("$detailtint", detailTint, shader), 1f);
-            material.IntParams["g_nDetailBlendMode"] = values.Integer("$detailblendmode", 0);
+            return;
         }
 
+        // The two texture lightmapped shader declares a scale of one, the others four
+        var defaultDetailScale = shader == "lightmappedtwotexture" ? 1f : 4f;
+        material.FloatParams["g_flDetailScale"] = values.Float("$detailscale", defaultDetailScale);
+
+        // The detail texture blends over the base by its own alpha, without a blend mode, factor or tint
+        if (shader == "worldtwotextureblend")
+        {
+            SetFlag(material, "F_DETAIL_ALPHA_MASK_BASE_TEXTURE", values.Boolean("$detail_alpha_mask_base_texture"));
+            return;
+        }
+
+        material.FloatParams["g_flDetailBlendFactor"] = values.Float("$detailblendfactor", 1f);
+        var detailTint = values.Vector("$detailtint", Vector3.One);
+        material.VectorParams["g_vDetailTint"] = new Vector4(ConvertTint("$detailtint", detailTint, shader), 1f);
+        material.IntParams["g_nDetailBlendMode"] = values.Integer("$detailblendmode", 0);
+    }
+
+    private static void SetColorTint(ResourceTypes.Material material, VmtParameters values, string shader)
+    {
         // $color2 modulates the color of every shader, on top of $color
         var colorTint = values.Vector("$color", Vector3.One) * values.Vector("$color2", Vector3.One);
 
@@ -676,35 +960,70 @@ internal static class Source1MaterialConverter
         {
             material.IntParams["g_bFogEnabled"] = 0;
         }
+    }
+
+    private static void SetTransforms(ResourceTypes.Material material, VmtParameters values, string shader, SurfaceFeatures features)
+    {
+        var isLightmapped = IsLightmapped(shader);
 
         SetTransform(material, values, "$basetexturetransform", "g_vTexCoordTransformRow0", "g_vTexCoordTransformRow1");
 
-        if (isLightmapped || isWater)
+        if (shader is "unlittwotexture" or "monitorscreen")
+        {
+            SetTransform(material, values, "$texture2transform", "g_vTexCoord2TransformRow0", "g_vTexCoord2TransformRow1");
+        }
+
+        if (isLightmapped || IsWater(shader))
         {
             SetTransform(material, values, "$bumptransform", "g_vBumpTransformRow0", "g_vBumpTransformRow1");
         }
 
-        if (isLightmapped)
+        if (!isLightmapped)
         {
-            if (hasEnvmapMask)
-            {
-                SetTransform(material, values, "$envmapmasktransform", "g_vEnvMapMaskTransformRow0", "g_vEnvMapMaskTransformRow1");
-            }
-
-            // The seamless mapping replaces the base texture coordinates, and has no detail texture
-            if (!hasDetail)
-            {
-                material.FloatParams["g_flSeamlessScale"] = values.Float("$seamless_scale", 0f);
-            }
+            return;
         }
 
-        return material;
+        // Only a surface that blends by its blend modulate texture alone moves the texture
+        if (values.Boolean("$maskedblending"))
+        {
+            SetTransform(material, values, "$blendmasktransform", "g_vBlendMaskTransformRow0", "g_vBlendMaskTransformRow1");
+        }
+
+        if (features.HasEnvmapMask)
+        {
+            SetTransform(material, values, "$envmapmasktransform", "g_vEnvMapMaskTransformRow0", "g_vEnvMapMaskTransformRow1");
+        }
+
+        // The seamless mapping replaces the base texture coordinates, and has no detail texture
+        if (!features.HasDetail)
+        {
+            material.FloatParams["g_flSeamlessScale"] = values.Float("$seamless_scale", 0f);
+        }
+    }
+
+    // What the textures and parameters of a material turn on in the shader, once the combinations the shaders cannot do are removed
+    private readonly record struct SurfaceFeatures(
+        string? Envmap,
+        bool Phong,
+        bool BasemapAlphaPhongMask,
+        bool HasBump,
+        bool HasEnvmapMask,
+        bool HasSelfIllumMask,
+        bool HasDetail,
+        bool SelfIllum,
+        bool SelfIllumFromMask,
+        bool SelfIllumFresnel,
+        bool BaseAlphaEnvmapMask,
+        bool NormalMapAlphaEnvmapMask,
+        bool UseLightWarp)
+    {
+        public bool HasEnvmap => Envmap != null;
     }
 
     // Lightmapped surfaces and detail sprites use the tint as it is, the others convert it from gamma space
     internal static Vector3 ConvertColorTint(Vector3 tint, string shader)
     {
-        var rawTint = IsLightmapped(shader) || shader == "detailsprite";
+        var rawTint = IsLightmapped(shader) || shader is "detailsprite" or "modulate";
 
         return rawTint ? tint : TintToLinear(tint);
     }
@@ -743,7 +1062,7 @@ internal static class Source1MaterialConverter
     private static bool IsWater(string shader) => shader is "water" or "refract" or "watercheap";
 
     private static bool IsLightmapped(string shader)
-        => shader is "lightmappedgeneric" or "worldvertextransition" or "lightmappedreflective" or "lightmappedtwotexture";
+        => shader is "lightmappedgeneric" or "worldvertextransition" or "lightmappedreflective" or "lightmappedtwotexture" or "worldtwotextureblend";
 
     private static bool IsVertexLit(string shader) => shader is "vertexlitgeneric" or "eyes" or "eyerefract" or "teeth" or "skin";
 
@@ -769,7 +1088,7 @@ internal static class Source1MaterialConverter
             return 1f;
         }
 
-        return MathF.Pow(MathF.Floor(channel * 255f) / 255f, 2.2f);
+        return MathF.Pow(MathUtils.FloorToUnorm8Step(channel), 2.2f);
     }
 
     private static bool? ResolveHdrCondition(string symbol, bool highDynamicRange)
@@ -782,34 +1101,14 @@ internal static class Source1MaterialConverter
         return null;
     }
 
-    // The provider falls back to the plain cube map when a high dynamic range one does not exist
-    private static string ToHdrTexturePath(string path)
-    {
-        const string TextureExtension = ".vtf";
-        const string HdrTextureExtension = ".hdr.vtf";
-
-        if (!path.EndsWith(TextureExtension, StringComparison.OrdinalIgnoreCase)
-            || path.EndsWith(HdrTextureExtension, StringComparison.OrdinalIgnoreCase))
-        {
-            return path;
-        }
-
-        return string.Concat(path.AsSpan(0, path.Length - TextureExtension.Length), HdrTextureExtension);
-    }
-
     // A detail texture of a lightmapped surface that is flagged as a self shadowed bump map holds lightmap weights
     // when the surface has a bump map and a brightness otherwise, whatever blend mode the material asks for
-    private static void ApplySsbumpDetail(Source1FileSystem fileSystem, ResourceTypes.Material material)
+    private static void ApplySsbumpDetail(Source1FileSystem fileSystem, ResourceTypes.Material material, string shader)
     {
         const int DetailBlendBumpWeights = 10;
         const int DetailBlendBrightness = 11;
 
-        var shaderName = material.ShaderName;
-
-        if (shaderName != ResourceTypes.Material.Source1ShaderPrefix + "lightmappedgeneric"
-            && shaderName != ResourceTypes.Material.Source1ShaderPrefix + "worldvertextransition"
-            && shaderName != ResourceTypes.Material.Source1ShaderPrefix + "lightmappedtwotexture"
-            && shaderName != ResourceTypes.Material.Source1ShaderPrefix + "lightmappedreflective")
+        if (!IsLightmapped(shader))
         {
             return;
         }

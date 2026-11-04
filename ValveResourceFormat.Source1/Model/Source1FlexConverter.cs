@@ -1,5 +1,6 @@
 using System.Globalization;
 using ValveKeyValue;
+using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes;
 using VrfTexture = ValveResourceFormat.ResourceTypes.Texture;
 
@@ -332,8 +333,8 @@ internal sealed class Source1FlexConverter
         var bundle = KVObject.Collection();
         bundle.Add("m_flULeftSrc", atlasColumn / (float)atlasWidth);
         bundle.Add("m_flVTopSrc", atlasRow / (float)atlasHeight);
-        bundle.Add("m_offsets", ToArray(offset));
-        bundle.Add("m_ranges", ToArray(step * 255f));
+        bundle.Add("m_offsets", KVHelpers.ToKVArray(offset));
+        bundle.Add("m_ranges", KVHelpers.ToKVArray(step * 255f));
 
         return bundle;
     }
@@ -577,14 +578,4 @@ internal sealed class Source1FlexConverter
     }
 
     private static Source1FlexOp CreateConst(float value) => new((int)FlexOpCode.Const, BitConverter.SingleToInt32Bits(value));
-
-    private static KVObject ToArray(Vector4 value)
-    {
-        var array = KVObject.Array();
-        array.Add(value.X);
-        array.Add(value.Y);
-        array.Add(value.Z);
-        array.Add(value.W);
-        return array;
-    }
 }

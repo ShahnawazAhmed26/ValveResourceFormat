@@ -124,6 +124,17 @@ vec3 SampleSource1Envmap(vec3 normal, vec3 position)
     return SampleSource1Cube(reflection);
 }
 
+#define renderMode_Cubemaps 0
+
+// Replaces the color with the cube map at full reflectivity when the Cubemaps render mode is active
+void ApplySource1CubemapRenderMode(inout vec4 color, vec3 normal, vec3 position)
+{
+    if (g_iRenderMode == renderMode_Cubemaps)
+    {
+        color = vec4(SrgbLinearToGamma(SampleSource1Envmap(normal, position)), 1.0);
+    }
+}
+
 // The cube map seen through the surface, tinted and adjusted but not yet faded by a fresnel term
 vec3 GetSource1EnvmapColor(vec3 normal, vec3 position, vec3 mask, vec3 tint)
 {

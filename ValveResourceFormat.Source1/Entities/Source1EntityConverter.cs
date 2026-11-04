@@ -115,7 +115,7 @@ internal static class Source1EntityConverter
         ArgumentNullException.ThrowIfNull(bsp);
 
         var lump = CreateLump(bsp.Name);
-        options ??= new Source1EntityConverterOptions { HdrLighting = bsp.HasHdrLighting };
+        options ??= Source1EntityConverterOptions.ForMap(bsp);
 
         return Convert(bsp.Entities, lump, options);
     }
@@ -239,12 +239,6 @@ internal static class Source1EntityConverter
             return true;
         }
 
-        // Triggers never draw, whatever material their brushes use
-        if (entity.ClassName.StartsWith("trigger_", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
         if (entity.ClassName == "func_wall_toggle")
         {
             return (entity.GetInt("spawnflags") & WallToggleStartOff) != 0;
@@ -309,7 +303,7 @@ internal static class Source1EntityConverter
                 SourceEntity = source,
                 OutputName = name,
                 TargetName = parsed.Target,
-                InputName = parsed.Input,
+                InputName = GetInputName(parsed.Input),
                 OverrideParam = parsed.Parameter,
                 Delay = parsed.Delay,
                 TimesToFire = parsed.TimesToFire,
@@ -318,6 +312,27 @@ internal static class Source1EntityConverter
         }
 
         return connections;
+    }
+
+    // The inputs of a sprite that show and hide it are the enable inputs of a brush that is drawn
+    private static string GetInputName(string input)
+    {
+        if (input.Equals("ShowSprite", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Enable";
+        }
+
+        if (input.Equals("HideSprite", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Disable";
+        }
+
+        if (input.Equals("ToggleSprite", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Toggle";
+        }
+
+        return input;
     }
 
     private readonly record struct ParsedOutput(string Target, string Input, string Parameter, float Delay, int TimesToFire);
@@ -370,4 +385,8 @@ internal static class Source1EntityConverter
 
         return float.TryParse(token[..length], NumberStyles.Float, CultureInfo.InvariantCulture, out number);
     }
+
+    /// <summary>Formats a vector as the <c>x y z</c> text of an entity key.</summary>
+    public static string FormatVector(Vector3 value)
+        => string.Create(CultureInfo.InvariantCulture, $"{value.X} {value.Y} {value.Z}");
 }

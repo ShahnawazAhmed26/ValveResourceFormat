@@ -25,5 +25,10 @@
     #define SOURCE1_BLEND_BY_VERTEX_ALPHA 0
 #endif
 
+// Set by the shader whose detail texture blends over the base texture by its own alpha
+#ifndef SOURCE1_WORLD_TWO_TEXTURE_BLEND
+#define SOURCE1_WORLD_TWO_TEXTURE_BLEND 0
+#endif
+
 // Only the additive detail blend mode holds colors
 #define SOURCE1_DETAIL_SRGB_ALL_MODES 0
