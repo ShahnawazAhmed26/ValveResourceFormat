@@ -319,6 +319,13 @@ namespace GUI.Types.Exporter
 
                 var fileFullName = packageFile.GetFullPath();
 
+                Log.Info(nameof(PackageExporter), $"DEBUG PATH: [{fileFullName}]");
+
+                if (extractedFiles.Contains(fileFullName))
+                {
+                    continue;
+                }
+
                 if (extractedFiles.Contains(fileFullName))
                 {
                     continue;

@@ -149,5 +149,10 @@ namespace ValveResourceFormat
         /// Meshlet buffer. Contains local vertex and triangle index data for meshlet rendering.
         /// </summary>
         MSLT = 'M' | ('S' << 8) | ('L' << 16) | ('T' << 24),
+
+        /// <summary>
+        /// Resource version/update metadata stored as binary KV3.
+        /// </summary>
+        RVUP = 'R' | ('V' << 8) | ('U' << 16) | ('P' << 24),
     }
 }

@@ -503,6 +503,7 @@ namespace ValveResourceFormat
                 BlockType.AGRP => new KeyValuesOrNTRO(BlockType.AGRP, "AnimationGroupResourceData_t") { Resource = this },
                 BlockType.PHYS => new PhysAggregateData(BlockType.PHYS) { Resource = this },
                 BlockType.SPRV => new SboxShader(BlockType.SPRV) { Resource = this },
+                BlockType.RVUP => new ResourceVersionUpdate() { Resource = this },
                 _ => throw new ArgumentException($"Unrecognized block type '{Encoding.ASCII.GetString(BitConverter.GetBytes((uint)blockType))}'"),
             };
         }
