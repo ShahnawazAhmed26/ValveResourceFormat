@@ -1,5 +1,6 @@
 using System.IO;
 using System.Threading;
+using Datamodel;
 using Microsoft.Extensions.Logging;
 using ValveKeyValue;
 using ValveResourceFormat.ResourceTypes;
@@ -16,7 +17,7 @@ internal sealed class Source1ParticleLibrary
 {
     private readonly Source1FileSystem fileSystem;
     private readonly ILogger logger;
-    private readonly Dictionary<string, DmxElement> systems = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Element> systems = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ParticleSystem?> converted = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, PcfMaterialInfo?> materials = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> loadedFiles = new(StringComparer.OrdinalIgnoreCase);

@@ -1,3 +1,4 @@
+using Datamodel;
 using Microsoft.Extensions.Logging;
 using ValveKeyValue;
 using ValveResourceFormat.IO;
@@ -151,7 +152,7 @@ internal sealed class Source1ParticleConverter
         data.Add("m_BoundingBoxMin", KVHelpers.ToKVArray(element.GetVector3("bounding_box_min", new Vector3(-10f))));
         data.Add("m_BoundingBoxMax", KVHelpers.ToKVArray(element.GetVector3("bounding_box_max", new Vector3(10f))));
         data.Add("m_flConstantRadius", element.GetFloat("radius", 5f));
-        data.Add("m_ConstantColor", Color(element.GetColor("color", new DmxColor(255, 255, 255, 255))));
+        data.Add("m_ConstantColor", Color(element.GetColor("color", new Datamodel.Color(255, 255, 255, 255))));
         data.Add("m_flConstantRotation", element.GetFloat("rotation"));
         data.Add("m_flConstantRotationSpeed", element.GetFloat("rotation_speed"));
         data.Add("m_ConstantNormal", KVHelpers.ToKVArray(element.GetVector3("normal", Vector3.UnitZ)));
@@ -204,7 +205,7 @@ internal sealed class Source1ParticleConverter
         return children;
     }
 
-    private KVObject ConvertFunctions(string kind, List<PcfFunction> functions, Func<string, DmxElement, KVObject?> convert)
+    private KVObject ConvertFunctions(string kind, List<PcfFunction> functions, Func<string, Element, KVObject?> convert)
     {
         var converted = KVObject.Array();
 
@@ -245,7 +246,7 @@ internal sealed class Source1ParticleConverter
     }
 
     // The fields every operator has to fade it in and out over the life of the system
-    private static void AddGenericFields(KVObject function, DmxElement source)
+    private static void AddGenericFields(KVObject function, Element source)
     {
         AddIfPresent(function, source, "operator start fadein", "m_flOpStartFadeInTime");
         AddIfPresent(function, source, "operator end fadein", "m_flOpEndFadeInTime");
@@ -257,9 +258,14 @@ internal sealed class Source1ParticleConverter
         AddIfPresent(function, source, "operator time offset seed", "m_nOpTimeOffsetSeed");
     }
 
-    private static void AddIfPresent(KVObject function, DmxElement source, string sourceKey, string key)
+    private static void AddIfPresent(KVObject function, Element source, string sourceKey, string key)
     {
-        switch (source.Get(sourceKey))
+        if (!source.TryGetAttribute(sourceKey, out var attribute))
+        {
+            return;
+        }
+
+        switch (attribute)
         {
             case float value when value != 0f:
                 function.Add(key, value);
@@ -270,7 +276,7 @@ internal sealed class Source1ParticleConverter
         }
     }
 
-    private KVObject? ConvertEmitter(string name, DmxElement source)
+    private KVObject? ConvertEmitter(string name, Element source)
     {
         switch (name)
         {
@@ -333,7 +339,7 @@ internal sealed class Source1ParticleConverter
         }
     }
 
-    private KVObject? ConvertInitializer(string name, DmxElement source)
+    private KVObject? ConvertInitializer(string name, Element source)
     {
         switch (name)
         {
@@ -351,7 +357,7 @@ internal sealed class Source1ParticleConverter
                 var min = source.GetInt("alpha_min", 255) / 255f;
                 var max = source.GetInt("alpha_max", 255) / 255f;
 
-                return InitFloat(AlphaField, min, max, source.Attributes.ContainsKey("alpha_random_exponent"), source.GetFloat("alpha_random_exponent", 1f), signFlip: false);
+                return InitFloat(AlphaField, min, max, source.HasAttribute("alpha_random_exponent"), source.GetFloat("alpha_random_exponent", 1f), signFlip: false);
             }
 
             case "Rotation Random":
@@ -373,10 +379,10 @@ internal sealed class Source1ParticleConverter
             case "Color Random":
             {
                 var initializer = Function("C_INIT_RandomColor");
-                initializer.Add("m_ColorMin", Color(source.GetColor("color1", new DmxColor(255, 255, 255, 255))));
-                initializer.Add("m_ColorMax", Color(source.GetColor("color2", new DmxColor(255, 255, 255, 255))));
-                initializer.Add("m_TintMin", Color(source.GetColor("tint clamp min", new DmxColor(0, 0, 0, 0))));
-                initializer.Add("m_TintMax", Color(source.GetColor("tint clamp max", new DmxColor(255, 255, 255, 255))));
+                initializer.Add("m_ColorMin", Color(source.GetColor("color1", new Datamodel.Color(255, 255, 255, 255))));
+                initializer.Add("m_ColorMax", Color(source.GetColor("color2", new Datamodel.Color(255, 255, 255, 255))));
+                initializer.Add("m_TintMin", Color(source.GetColor("tint clamp min", new Datamodel.Color(0, 0, 0, 0))));
+                initializer.Add("m_TintMax", Color(source.GetColor("tint clamp max", new Datamodel.Color(255, 255, 255, 255))));
                 initializer.Add("m_flTintPerc", source.GetFloat("tint_perc"));
                 initializer.Add("m_nTintCP", source.GetInt("tint control point"));
                 initializer.Add("m_flUpdateThreshold", source.GetFloat("tint update movement threshold", 32f));
@@ -660,7 +666,7 @@ internal sealed class Source1ParticleConverter
     }
 
     // Spawns around the control point, or around a random one of those that are set above it
-    private static KVObject SphereTransform(DmxElement source)
+    private static KVObject SphereTransform(Element source)
     {
         var controlPoint = source.GetInt("control_point_number");
 
@@ -695,7 +701,7 @@ internal sealed class Source1ParticleConverter
         }
     }
 
-    private static string GetSetMethod(DmxElement source)
+    private static string GetSetMethod(Element source)
     {
         if (source.GetBool("output is scalar of initial random range"))
         {
@@ -711,7 +717,7 @@ internal sealed class Source1ParticleConverter
     }
 
     // The remap is an input of an InitFloat, which only acts while the emitter is within its lifetime window
-    private static KVObject RemapInit(DmxElement source, KVObject input, int outputField, KVObject? activeRangeGate = null)
+    private static KVObject RemapInit(Element source, KVObject input, int outputField, KVObject? activeRangeGate = null)
     {
         var initializer = Function("C_INIT_InitFloat");
         var setMethod = GetSetMethod(source);
@@ -765,7 +771,7 @@ internal sealed class Source1ParticleConverter
         return initializer;
     }
 
-    private static KVObject PathParameters(DmxElement source, string bulgeKey = "bulge")
+    private static KVObject PathParameters(Element source, string bulgeKey = "bulge")
     {
         const string BulgeControlKey = "bulge control 0=random 1=orientation of start pnt 2=orientation of end point";
 
@@ -779,7 +785,7 @@ internal sealed class Source1ParticleConverter
         return path;
     }
 
-    private KVObject? ConvertOperator(string name, DmxElement source)
+    private KVObject? ConvertOperator(string name, Element source)
     {
         switch (name)
         {
@@ -840,7 +846,7 @@ internal sealed class Source1ParticleConverter
             case "Color Fade":
             {
                 var fade = Function("C_OP_ColorInterpolate");
-                fade.Add("m_ColorFade", Color(source.GetColor("color_fade", new DmxColor(255, 255, 255, 255))));
+                fade.Add("m_ColorFade", Color(source.GetColor("color_fade", new Datamodel.Color(255, 255, 255, 255))));
                 fade.Add("m_flFadeStartTime", source.GetFloat("fade_start_time"));
                 fade.Add("m_flFadeEndTime", source.GetFloat("fade_end_time", 1f));
                 fade.Add("m_bEaseInOut", source.GetBool("ease_in_and_out", true));
@@ -1037,7 +1043,7 @@ internal sealed class Source1ParticleConverter
         }
     }
 
-    private static KVObject FadeAndKill(string className, DmxElement source)
+    private static KVObject FadeAndKill(string className, Element source)
     {
         var fade = Function(className);
         fade.Add("m_flStartAlpha", source.GetFloat("start_alpha", 1f));
@@ -1050,7 +1056,7 @@ internal sealed class Source1ParticleConverter
         return fade;
     }
 
-    private static void AddOscillationTiming(KVObject oscillate, DmxElement source)
+    private static void AddOscillationTiming(KVObject oscillate, Element source)
     {
         oscillate.Add("m_flStartTime_min", source.GetFloat("start time min"));
         oscillate.Add("m_flStartTime_max", source.GetFloat("start time max"));
@@ -1062,7 +1068,7 @@ internal sealed class Source1ParticleConverter
         oscillate.Add("m_bProportionalOp", source.GetBool("start/end proportional", true));
     }
 
-    private KVObject? ConvertForce(string name, DmxElement source)
+    private KVObject? ConvertForce(string name, Element source)
     {
         switch (name)
         {
@@ -1098,7 +1104,7 @@ internal sealed class Source1ParticleConverter
         }
     }
 
-    private static KVObject? ConvertConstraint(string name, DmxElement source)
+    private static KVObject? ConvertConstraint(string name, Element source)
     {
         switch (name)
         {
@@ -1130,7 +1136,7 @@ internal sealed class Source1ParticleConverter
         }
     }
 
-    private KVObject? ConvertRenderer(string name, DmxElement source)
+    private KVObject? ConvertRenderer(string name, Element source)
     {
         switch (name)
         {
@@ -1174,7 +1180,7 @@ internal sealed class Source1ParticleConverter
     }
 
     // The material of the system, which the renderers of Source 1 draw with, and the visibility settings they share
-    private void AddSpriteSettings(KVObject renderer, DmxElement source)
+    private void AddSpriteSettings(KVObject renderer, Element source)
     {
         var materialName = system.Element.GetString("material");
         var material = string.IsNullOrEmpty(materialName) ? null : resolveMaterial?.Invoke(materialName);
@@ -1230,23 +1236,23 @@ internal sealed class Source1ParticleConverter
         renderer.Add("VisibilityInputs", visibility);
     }
 
-    private static KVObject RandomInit(DmxElement source, string minKey, string maxKey, string exponentKey, float minDefault, float maxDefault, int field)
+    private static KVObject RandomInit(Element source, string minKey, string maxKey, string exponentKey, float minDefault, float maxDefault, int field)
     {
         var min = source.GetFloat(minKey, minDefault);
         var max = source.GetFloat(maxKey, maxDefault);
 
-        return InitFloat(field, min, max, source.Attributes.ContainsKey(exponentKey), source.GetFloat(exponentKey, 1f), signFlip: false);
+        return InitFloat(field, min, max, source.HasAttribute(exponentKey), source.GetFloat(exponentKey, 1f), signFlip: false);
     }
 
     // The angle is the base plus the offset, so the offsets are summed with it
-    private static KVObject RotationInit(DmxElement source, int field, string baseKey, string minKey, string maxKey, string exponentKey, float maxDefault)
+    private static KVObject RotationInit(Element source, int field, string baseKey, string minKey, string maxKey, string exponentKey, float maxDefault)
     {
         var degrees = source.GetFloat(baseKey);
         var min = degrees + source.GetFloat(minKey);
         var max = degrees + source.GetFloat(maxKey, maxDefault);
         var flip = source.GetBool("randomly_flip_direction");
 
-        return InitFloat(field, min, max, source.Attributes.ContainsKey(exponentKey), source.GetFloat(exponentKey, 1f), flip);
+        return InitFloat(field, min, max, source.HasAttribute(exponentKey), source.GetFloat(exponentKey, 1f), flip);
     }
 
     private static KVObject InitFloat(int field, float min, float max, bool hasExponent, float exponent, bool signFlip)
@@ -1300,7 +1306,7 @@ internal sealed class Source1ParticleConverter
         return input;
     }
 
-    private static KVObject Color(DmxColor color)
+    private static KVObject Color(Datamodel.Color color)
     {
         var array = KVObject.Array();
         array.Add(new KVObject((int)color.R));

@@ -141,7 +141,7 @@ Source 1 maps, models, materials and textures are converted to Source 2 resource
   - `_english` language substitution
   - GMA addons
   - folders with only a `gameinfo_*.txt` file
-- DMX: the `uint64` and `uint8` text types and the legacy `binary_v1` and `binary_v2` headers
+- DMX: the `uint64` text type and the legacy `DMXVersion` headers
 
 ### GoldSrc
 
