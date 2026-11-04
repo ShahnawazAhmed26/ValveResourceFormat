@@ -52,7 +52,7 @@ int GatherSource1EyeLights(vec3 position, out vec3 directions[SOURCE1_EYE_MAX_LI
         }
 
         float clampedDistanceSquared = max(distanceSquared, 1.0);
-        float attenuation = saturate(1.0 / dot(vec2(sqrt(clampedDistanceSquared), clampedDistanceSquared), falloff.xy) - falloff.w);
+        float attenuation = GetDistanceAttenuation(falloff, clampedDistanceSquared);
         vec3 lightDirection = normalize(toLight);
 
         if (GetLightType(i) == LIGHT_TYPE_SPOT)

@@ -115,7 +115,7 @@ void AddSource1SceneLights(inout vec3 diffuse, inout vec3 specular, inout vec3 r
         }
 
         float clampedDistanceSquared = max(distanceSquared, 1.0);
-        float attenuation = saturate(1.0 / dot(vec2(sqrt(clampedDistanceSquared), clampedDistanceSquared), falloff.xy) - falloff.w);
+        float attenuation = GetDistanceAttenuation(falloff, clampedDistanceSquared);
         vec3 lightDirection = normalize(toLight);
 
         if (GetLightType(i) == LIGHT_TYPE_SPOT)
