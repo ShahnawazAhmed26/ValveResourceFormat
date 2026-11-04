@@ -271,15 +271,7 @@ namespace ValveResourceFormat.Renderer.Utils
         /// Evaluates a uniform Catmull-Rom spline between <paramref name="p1"/> (t = 0) and <paramref name="p2"/> (t = 1).
         /// </summary>
         internal static Vector3 CatmullRom(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, float t)
-        {
-            var t2 = t * t;
-            var t3 = t2 * t;
-
-            return 0.5f * ((2f * p1)
-                + ((-p0 + p2) * t)
-                + (((2f * p0) - (5f * p1) + (4f * p2) - p3) * t2)
-                + ((-p0 + (3f * p1) - (3f * p2) + p3) * t3));
-        }
+            => MathUtils.CatmullRom(p0, p1, p2, p3, t);
 
         /// <inheritdoc cref="CatmullRom(Vector3, Vector3, Vector3, Vector3, float)"/>
         internal static float CatmullRom(float p0, float p1, float p2, float p3, float t)

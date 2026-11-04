@@ -3,7 +3,7 @@
 ValveResourceFormat (VRF) is a C# library and toolset for parsing Valve's Source 2 resource formats. Solution: `ValveResourceFormat.slnx`. Targets the latest released .NET with nullable reference types enabled. CI builds Release, which enables `TreatWarningsAsErrors` and all analyzers.
 
 - **ValveResourceFormat/**: Core parsing library published to NuGet
-- **ValveResourceFormat.Source1/**: Source 1 and GoldSrc parsers and converters, built on the core library, which must not reference it; not published and not in the CLI
+- **ValveResourceFormat.Source1/**: Source 1 and GoldSrc parsers and converters, built on the core library, which must not reference it; not published, and the CLI uses it only for `--test`
 - **GUI/**: WinForms viewer
     - `Source2Viewer.exe --mcp` serves an HTTP MCP server at `http://127.0.0.1:13338/mcp`, letting an agent open files, drive the camera and sidebar controls, inspect entities, models and particle systems, pick, trace, pause and step simulation time, read the log and render stats, and screenshot the real viewer. `--mcp=<port>` serves on another port, to run several viewers at once. Debug builds only; the tools are `[Tool]` methods of `McpTools` in `GUI/Automation/`.
 - **CLI/**: Command-line decompiler and file viewer, read `CLI/AGENTS.md` before using it to inspect game files

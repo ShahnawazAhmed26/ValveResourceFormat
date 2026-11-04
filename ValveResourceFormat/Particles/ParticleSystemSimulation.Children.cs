@@ -135,31 +135,21 @@ namespace ValveResourceFormat.Particles
                 }
 
                 var childName = childInfo.GetStringProperty("m_ChildRef");
-                string? childFileName;
-                ParticleSystem? childSystemDefinition;
+                var childResource = fileLoader.LoadFileCompiled(childName);
 
-                if (childResolver != null)
-                {
-                    childFileName = childName;
-                    childSystemDefinition = childResolver(childName);
-                }
-                else
-                {
-                    var childResource = fileLoader.LoadFileCompiled(childName);
-                    childFileName = childResource?.FileName;
-                    childSystemDefinition = (ParticleSystem?)childResource?.DataBlock;
-                }
-
-                if (childSystemDefinition == null)
+                if (childResource == null)
                 {
                     continue;
                 }
 
-                if (IsSelfOrAncestor(childFileName))
+                if (IsSelfOrAncestor(childResource.FileName))
                 {
                     logger.LogUniqueWarning("Skipped child {Child} of particle system {File}, because it is that system or one of its parents", childName, Name);
                     continue;
                 }
+
+                var childSystemDefinition = (ParticleSystem?)childResource.DataBlock;
+                Debug.Assert(childSystemDefinition != null);
 
                 var delay = parse.Float("m_flDelay", 0f);
 

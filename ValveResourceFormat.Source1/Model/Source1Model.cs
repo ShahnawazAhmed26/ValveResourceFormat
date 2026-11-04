@@ -117,9 +117,12 @@ internal struct Source1Vertex
     public float Weight2;
 }
 
-/// <summary>A mesh of a Source 1 sub-model, one material, LOD 0.</summary>
+/// <summary>A mesh of a Source 1 sub-model at one level of detail, with one material.</summary>
 internal sealed class Source1Mesh
 {
+    /// <summary>The level of detail the mesh belongs to, 0 being the most detailed.</summary>
+    public required int Lod { get; init; }
+
     /// <summary>Deduplicated vertices.</summary>
     public required Source1Vertex[] Vertices { get; init; }
 
@@ -132,23 +135,65 @@ internal sealed class Source1Mesh
     /// <summary>Index into <see cref="Source1Model.MaterialNames"/> for the default skin family.</summary>
     public required int MaterialIndex { get; init; }
 
-    /// <summary>Studio material type, 1 marks an eyeball mesh.</summary>
-    public required int MaterialType { get; init; }
-
-    /// <summary>For an eyeball mesh, the index of its eyeball in <see cref="Source1SubModel.Eyeballs"/>.</summary>
-    public required int MaterialParam { get; init; }
-
     /// <summary>For each mesh vertex id, the index in <see cref="Vertices"/> of the vertex read from it, or -1 when no triangle uses the id.</summary>
     public required int[] OutputByOriginalVertexId { get; init; }
 
-    /// <summary>For each LOD 0 strip group of the mesh, the mesh vertex id of each of its vertices.</summary>
+    /// <summary>For each strip group of the mesh, the mesh vertex id of each of its vertices.</summary>
     public required int[][] StripGroupVertexIds { get; init; }
 
-    /// <summary>Position of the first strip group of the mesh among the LOD 0 strip groups of the whole model.</summary>
+    /// <summary>Position of the first strip group of the mesh among the strip groups of the whole model at the same level of detail.</summary>
     public required int FirstStripGroup { get; init; }
 
-    /// <summary>Morph targets that move the vertices of the mesh.</summary>
-    public required Source1MeshFlex[] Flexes { get; init; }
+    /// <summary>The flexes that move vertices of the mesh.</summary>
+    public Source1Flex[] Flexes { get; init; } = [];
+}
+
+/// <summary>A flex controller, an input of the flex rules.</summary>
+internal sealed record Source1FlexController(string Name, string Type, float Min, float Max);
+
+/// <summary>An operation of a flex rule. <see cref="Data"/> is an index or the bits of a float, depending on the operation.</summary>
+internal readonly record struct Source1FlexOp(int Code, int Data);
+
+/// <summary>A rule that computes the weight of a flex descriptor from the flex controllers, as a stack program.</summary>
+internal sealed record Source1FlexRule(int FlexDesc, Source1FlexOp[] Ops);
+
+/// <summary>
+/// An eyelid of an eyeball. Its flex descriptor has no rule: it takes the height of the lid on the eyeball, which the
+/// weights of the raiser, neutral and lowerer descriptors blend between the heights of those poses.
+/// </summary>
+/// <param name="FlexDesc">The flex descriptor that the flexes of the lid follow.</param>
+/// <param name="EyeballRadius">Radius of the eyeball.</param>
+/// <param name="RaiserFlexDesc">The flex descriptor of the raised lid.</param>
+/// <param name="NeutralFlexDesc">The flex descriptor of the neutral lid.</param>
+/// <param name="LowererFlexDesc">The flex descriptor of the lowered lid.</param>
+/// <param name="Heights">Height of the lid on the eyeball when raised (X), neutral (Y) and lowered (Z).</param>
+internal sealed record Source1Eyelid(int FlexDesc, float EyeballRadius, int RaiserFlexDesc, int NeutralFlexDesc, int LowererFlexDesc, Vector3 Heights);
+
+/// <summary>How a flex moves one vertex of a mesh.</summary>
+/// <param name="Index">Mesh vertex id, see <see cref="Source1Mesh.OutputByOriginalVertexId"/>.</param>
+/// <param name="Speed">How much the vertex follows the current weight rather than the delayed one, from 0 to 1.</param>
+/// <param name="Side">How much the vertex follows the weight of <see cref="Source1Flex.FlexPair"/> rather than of <see cref="Source1Flex.FlexDesc"/>, from 0 to 1.</param>
+/// <param name="PositionDelta">Position offset at full weight.</param>
+/// <param name="NormalDelta">Normal offset at full weight.</param>
+/// <param name="WrinkleDelta">Wrinkle map blend at full weight, negative to compress and positive to stretch.</param>
+internal readonly record struct Source1FlexVertex(int Index, float Speed, float Side, Vector3 PositionDelta, Vector3 NormalDelta, float WrinkleDelta);
+
+/// <summary>The vertex offsets that a flex descriptor applies to one mesh.</summary>
+internal sealed class Source1Flex
+{
+    /// <summary>The flex descriptor whose weight drives the flex.</summary>
+    public required int FlexDesc { get; init; }
+
+    /// <summary>The flex descriptor that drives the right side of a stereo flex, or -1 when the flex is not split.</summary>
+    public required int FlexPair { get; init; }
+
+    /// <summary>
+    /// The descriptor weights at which the flex starts (X), reaches full strength (Y), starts to fade (Z) and is gone (W).
+    /// </summary>
+    public required Vector4 Targets { get; init; }
+
+    /// <summary>The vertices the flex moves.</summary>
+    public required Source1FlexVertex[] Vertices { get; init; }
 }
 
 /// <summary>A sub-model (one choice of a body group).</summary>
@@ -157,11 +202,8 @@ internal sealed class Source1SubModel
     /// <summary>Name of the sub-model.</summary>
     public required string Name { get; init; }
 
-    /// <summary>Meshes with geometry.</summary>
-    public required Source1Mesh[] Meshes { get; init; }
-
-    /// <summary>Eyeballs of the sub-model.</summary>
-    public required Source1Eyeball[] Eyeballs { get; init; }
+    /// <summary>For each level of detail, the meshes with geometry.</summary>
+    public required Source1Mesh[][] Lods { get; init; }
 }
 
 /// <summary>A body part (body group) holding alternative sub-models.</summary>
@@ -204,9 +246,6 @@ internal sealed partial class Source1Model
 
     /// <summary>Studio header flags.</summary>
     public int Flags { get; private set; }
-
-    /// <summary>Whether the model is flagged as a static prop.</summary>
-    public bool IsStaticProp => (Flags & (int)MdlFile.StudioFlags.StaticProp) != 0;
 
     /// <summary>Eye position.</summary>
     public Vector3 EyePosition { get; private set; }
@@ -253,13 +292,25 @@ internal sealed partial class Source1Model
     /// <summary>For each skin family, the material index of every skin reference.</summary>
     public int[][] SkinFamilies { get; private set; } = [];
 
-    /// <summary>Body parts with LOD 0 geometry.</summary>
+    /// <summary>Body parts with the geometry of every level of detail.</summary>
     public Source1BodyPart[] BodyParts { get; private set; } = [];
 
-    /// <summary>Number of LODs in the VTX file, 0 when there is no geometry.</summary>
+    /// <summary>Names of the flex descriptors, which <see cref="FlexRules"/> give weights to.</summary>
+    public string[] FlexDescNames { get; private set; } = [];
+
+    /// <summary>Flex controllers.</summary>
+    public Source1FlexController[] FlexControllers { get; private set; } = [];
+
+    /// <summary>Flex rules, in the order they run.</summary>
+    public Source1FlexRule[] FlexRules { get; private set; } = [];
+
+    /// <summary>Eyelids whose flex descriptors follow the eyeballs, set after the flex rules run.</summary>
+    public Source1Eyelid[] Eyelids { get; private set; } = [];
+
+    /// <summary>Number of LODs that are drawn on screen, 0 when there is no geometry.</summary>
     public int NumLods { get; private set; }
 
-    /// <summary>Switch distance of each LOD.</summary>
+    /// <summary>The value of the screen size metric (100 divided by the on-screen size of a unit sphere) from which each LOD is used.</summary>
     public float[] LodSwitchPoints { get; private set; } = [];
 
     /// <summary>Physics solids, empty when there is no PHY file.</summary>
@@ -276,8 +327,8 @@ internal sealed partial class Source1Model
     /// </summary>
     /// <param name="mdlPath">Path of the .mdl file as understood by <paramref name="openFile"/>.</param>
     /// <param name="openFile">Opens a file by path, returning null when it does not exist.</param>
-    /// <param name="requireGeometry">Whether a model with body parts fails to load without its VVD and VTX files. When false, it loads without geometry.</param>
-    public static Source1Model Load(string mdlPath, Func<string, Stream?> openFile, bool requireGeometry = true)
+    /// <remarks>A model without its VVD and VTX files loads without geometry.</remarks>
+    public static Source1Model Load(string mdlPath, Func<string, Stream?> openFile)
     {
         ArgumentNullException.ThrowIfNull(mdlPath);
         ArgumentNullException.ThrowIfNull(openFile);
@@ -290,20 +341,15 @@ internal sealed partial class Source1Model
         var mdl = new MdlFile(mdlData);
         var model = new Source1Model();
         model.ReadHeaderData(mdl, mdlData);
-        model.ReadFlexData(mdl);
         model.SetAnimationSource(mdl, mdlData, basePath, openFile);
 
-        var hasGeometry = mdl.BodyParts.Length > 0;
+        var hasBodyParts = mdl.BodyParts.Length > 0;
 
+        // A model that ships without its vertex files, such as one that only holds animations, has no geometry
         var vvdStream = OpenBuffered(openFile, basePath + ".vvd");
         var vtxStream = OpenFirst(openFile, basePath, ".dx90.vtx", ".vtx", ".dx80.vtx", ".sw.vtx");
 
-        if (requireGeometry && hasGeometry && (vvdStream == null || vtxStream == null))
-        {
-            throw new FileNotFoundException(vvdStream == null ? "VVD file not found." : "VTX file not found.", mdlPath);
-        }
-
-        if (vvdStream != null && vtxStream != null && hasGeometry)
+        if (vvdStream != null && vtxStream != null && hasBodyParts)
         {
             var vvd = new VvdFile(vvdStream);
             var vtx = new VtxFile(vtxStream, mdl, vvd);
@@ -427,7 +473,6 @@ internal sealed partial class Source1Model
         ViewMin = header.ViewBbMin;
         ViewMax = header.ViewBbMax;
         Mass = header.Mass;
-        MaxEyeDeflection = mdl.MaxEyeDeflection;
         SurfaceProperty = mdl.SurfaceProperty;
         KeyValues = mdl.KeyValues;
         MaterialNames = mdl.MaterialNames;
@@ -439,6 +484,11 @@ internal sealed partial class Source1Model
         {
             SkinFamilies[family] = Array.ConvertAll(mdl.SkinFamilies[family], m => (int)m);
         }
+
+        FlexDescNames = mdl.FlexDescNames;
+        FlexControllers = mdl.FlexControllers;
+        FlexRules = mdl.FlexRules;
+        Eyelids = [.. mdl.Eyelids];
 
         Bones = new Source1Bone[mdl.Bones.Length];
 
@@ -505,14 +555,22 @@ internal sealed partial class Source1Model
 
     private void BuildGeometry(MdlFile mdl, VvdFile vvd, VtxFile vtx)
     {
-        NumLods = vtx.NumLods;
-        LodSwitchPoints = vtx.LodSwitchPoints;
+        // A last LOD with a negative switch point is only drawn into shadows
+        var drawnLods = vtx.NumLods;
 
+        if (drawnLods > 1 && vtx.LodSwitchPoints[drawnLods - 1] < 0f)
+        {
+            drawnLods--;
+        }
+
+        NumLods = drawnLods;
+        LodSwitchPoints = vtx.LodSwitchPoints[..drawnLods];
+
+        // Every level of detail reads the vertices of the most detailed one, which come first in each mesh
         var vertexIndices = vvd.GetVertexIndices(0);
-        var eyeballs = ConvertEyeballs(mdl);
         BodyParts = new Source1BodyPart[mdl.BodyParts.Length];
 
-        var stripGroupCount = 0;
+        var stripGroupCountByLod = new int[NumLods];
 
         for (var partIndex = 0; partIndex < BodyParts.Length; partIndex++)
         {
@@ -522,25 +580,32 @@ internal sealed partial class Source1Model
             for (var modelIndex = 0; modelIndex < models.Length; modelIndex++)
             {
                 var mdlMeshes = mdl.Meshes[partIndex][modelIndex];
-                var vtxMeshes = vtx.Meshes[partIndex][modelIndex][0];
                 var modelVertexBase = mdlModels[modelIndex].VertexIndex / StudioVertexSize;
-                var meshes = new List<Source1Mesh>();
+                var lods = new Source1Mesh[NumLods][];
 
-                for (var meshIndex = 0; meshIndex < mdlMeshes.Length && meshIndex < vtxMeshes.Length; meshIndex++)
+                for (var lod = 0; lod < NumLods; lod++)
                 {
-                    var meshVertexBase = modelVertexBase + mdlMeshes[meshIndex].VertexOffset;
-                    var flexes = mdl.MeshFlexes[partIndex][modelIndex][meshIndex];
-                    var mesh = BuildMesh(mdl, vvd, vertexIndices, mdlMeshes[meshIndex], vtxMeshes[meshIndex], flexes, meshVertexBase, stripGroupCount);
+                    var vtxMeshes = vtx.Meshes[partIndex][modelIndex][lod];
+                    var meshes = new List<Source1Mesh>();
 
-                    if (mesh != null)
+                    for (var meshIndex = 0; meshIndex < mdlMeshes.Length && meshIndex < vtxMeshes.Length; meshIndex++)
                     {
-                        meshes.Add(mesh);
+                        var meshVertexBase = modelVertexBase + mdlMeshes[meshIndex].VertexOffset;
+                        var flexes = mdl.MeshFlexes[partIndex][modelIndex][meshIndex];
+                        var mesh = BuildMesh(mdl, vvd, vertexIndices, mdlMeshes[meshIndex], vtxMeshes[meshIndex], lod, meshVertexBase, stripGroupCountByLod[lod], flexes);
+
+                        if (mesh != null)
+                        {
+                            meshes.Add(mesh);
+                        }
+
+                        stripGroupCountByLod[lod] += vtxMeshes[meshIndex].StripGroupVertexIds.Length;
                     }
 
-                    stripGroupCount += vtxMeshes[meshIndex].StripGroupVertexIds.Length;
+                    lods[lod] = meshes.ToArray();
                 }
 
-                models[modelIndex] = new Source1SubModel { Name = mdlModels[modelIndex].Name, Meshes = meshes.ToArray(), Eyeballs = eyeballs[partIndex][modelIndex] };
+                models[modelIndex] = new Source1SubModel { Name = mdlModels[modelIndex].Name, Lods = lods };
             }
 
             BodyParts[partIndex] = new Source1BodyPart
@@ -552,7 +617,7 @@ internal sealed partial class Source1Model
         }
     }
 
-    private static Source1Mesh? BuildMesh(MdlFile mdl, VvdFile vvd, int[]? vertexIndices, MdlFile.StudioMesh mdlMesh, VtxFile.MeshData data, MdlFile.MeshFlex[] flexes, int meshVertexBase, int firstStripGroup)
+    private static Source1Mesh? BuildMesh(MdlFile mdl, VvdFile vvd, int[]? vertexIndices, MdlFile.StudioMesh mdlMesh, VtxFile.MeshData data, int lod, int meshVertexBase, int firstStripGroup, Source1Flex[] flexes)
     {
         if (mdlMesh.NumVertices == 0 || data.Indices.Length < 3)
         {
@@ -629,16 +694,15 @@ internal sealed partial class Source1Model
 
         return new Source1Mesh
         {
+            Lod = lod,
             Vertices = vertices,
             Indices = indices,
             SkinRefIndex = mdlMesh.Material,
             MaterialIndex = materialIndex,
-            MaterialType = mdlMesh.MaterialType,
-            MaterialParam = mdlMesh.MaterialParam,
             OutputByOriginalVertexId = originalToOutput,
             StripGroupVertexIds = data.StripGroupVertexIds,
             FirstStripGroup = firstStripGroup,
-            Flexes = BuildMeshFlexes(flexes, originalToOutput),
+            Flexes = flexes,
         };
     }
 

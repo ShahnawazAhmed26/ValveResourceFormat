@@ -7,7 +7,7 @@
 in vec3 vFragPosition;
 in vec2 vTexCoordOut;
 
-uniform sampler2D g_tNormal;
+uniform sampler2D g_tNormal; // Sampler(UserConfig)
 uniform sampler2D g_tSceneColor; // reserved
 
 uniform int F_BUMPMAP;

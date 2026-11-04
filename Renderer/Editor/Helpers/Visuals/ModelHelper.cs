@@ -6,6 +6,7 @@ using ValveKeyValue;
 using ValveResourceFormat.IO.Fgd;
 using ValveResourceFormat.Renderer.Editor.Entities;
 using ValveResourceFormat.Renderer.Editor.ToolRender;
+using ValveResourceFormat.Renderer.Entities;
 using ValveResourceFormat.Renderer.SceneNodes;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.ResourceTypes.ModelAnimation;
@@ -186,6 +187,8 @@ public class ModelHelper : EntityHelper
 
     private static bool IsOption(string argument) => Array.Exists(Options, option => option.Equals(argument, StringComparison.OrdinalIgnoreCase));
 
+    private static bool IsEditorFolderModel(string name) => name.Replace('\\', '/').StartsWith("models/editor/", StringComparison.OrdinalIgnoreCase);
+
     private static Settings ReadDeclaration(IHelperOwner owner, HelperDeclaration declaration)
     {
         var block = declaration.Metadata;
@@ -208,6 +211,13 @@ public class ModelHelper : EntityHelper
             name = declared;
             isNamedByClass = true;
             firstOption = 1;
+
+            // A class can declare a model the game draws and a model of the editor with the same helper, which the
+            // editor folder of the model tells apart
+            if (IsEditorFolderModel(declared))
+            {
+                isEditorModel = true;
+            }
         }
         else
         {
@@ -443,16 +453,19 @@ public class ModelHelper : EntityHelper
             SetSkin(node, skin);
         }
 
-        var choices = node.GetBodyGroupChoices().ToList();
-
         if (ParseBlock(GetStringKey("bodygroups")) is { } bodyGroups)
         {
-            SetBodyGroups(node, choices, bodyGroups);
+            SetBodyGroups(node, bodyGroups);
         }
 
-        if (settings.ForcedFirstBodyGroup is { } forced && choices.Count > 0)
+        if (settings.ForcedFirstBodyGroup is { } forced)
         {
-            SetBodyGroup(node, choices, choices[0].BodyGroup, forced);
+            var choices = node.GetBodyGroupChoices().ToList();
+
+            if (choices.Count > 0)
+            {
+                node.SetBodyGroup(choices[0].BodyGroup, forced);
+            }
         }
 
         // A model state gives the skin and the body groups at once
@@ -465,7 +478,7 @@ public class ModelHelper : EntityHelper
 
             if (GetBlock(modelState, "body_groups") is { } stateBodyGroups)
             {
-                SetBodyGroups(node, choices, stateBodyGroups);
+                SetBodyGroups(node, stateBodyGroups);
             }
         }
 
@@ -504,28 +517,11 @@ public class ModelHelper : EntityHelper
     }
 
     // Body groups by name, each with the number of the choice drawn of it
-    private static void SetBodyGroups(ModelSceneNode node, List<BodyGroupChoice> choices, KVObject bodyGroups)
+    private static void SetBodyGroups(ModelSceneNode node, KVObject bodyGroups)
     {
         foreach (var (bodyGroup, value) in bodyGroups)
         {
-            var choice = value.ValueType switch
-            {
-                KVValueType.String => int.TryParse(value.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0,
-                KVValueType.Collection or KVValueType.Array or KVValueType.Null => 0,
-                _ => value.ToInt32(CultureInfo.InvariantCulture),
-            };
-
-            SetBodyGroup(node, choices, bodyGroup, choice);
-        }
-    }
-
-    private static void SetBodyGroup(ModelSceneNode node, List<BodyGroupChoice> choices, string bodyGroup, int index)
-    {
-        var match = choices.FindIndex(choice => choice.Index == index && choice.BodyGroup.Equals(bodyGroup, StringComparison.OrdinalIgnoreCase));
-
-        if (match >= 0)
-        {
-            node.SetBodyGroupChoice(choices[match]);
+            node.SetBodyGroup(bodyGroup, BaseModelEntity.ReadBodyGroupChoice(value));
         }
     }
 

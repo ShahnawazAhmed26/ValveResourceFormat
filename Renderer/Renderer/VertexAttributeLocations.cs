@@ -65,16 +65,16 @@ namespace ValveResourceFormat.Renderer
         [VertexAttributeName("vCOLOR", "vVertexColor", Semantic = "COLOR")]
         Color,
 
-        /// <summary>Secondary texture coordinates.</summary>
-        [VertexAttributeName("vTEXCOORD1", Semantic = "TEXCOORD", SemanticIndex = 1)]
+        /// <summary>Secondary texture coordinates, the corner and orientation of a Source 1 billboard sprite, or the axis of a Source 1 rope ribbon.</summary>
+        [VertexAttributeName("vTEXCOORD1", "vSpriteBillboard", "vCableAxis", Semantic = "TEXCOORD", SemanticIndex = 1)]
         TexCoord1,
 
-        /// <summary>Layer blend weights, subsurface curvature on skin, or the prop origin of baked world meshes.</summary>
-        [VertexAttributeName("vTEXCOORD2", "flSSSCurvature", "vPropWorldOrigin", Semantic = "TEXCOORD", SemanticIndex = 2)]
+        /// <summary>Layer blend weights, subsurface curvature on skin, the prop origin of baked world meshes, or the roll, size and fade of a Source 1 sprite.</summary>
+        [VertexAttributeName("vTEXCOORD2", "flSSSCurvature", "vPropWorldOrigin", "vSpriteParams", Semantic = "TEXCOORD", SemanticIndex = 2)]
         TexCoord2,
 
-        /// <summary>Layer parameters, or foliage sway parameters.</summary>
-        [VertexAttributeName("vTEXCOORD3", "vFoliageParams", Semantic = "TEXCOORD", SemanticIndex = 3)]
+        /// <summary>Layer parameters, foliage sway parameters, or the fade distances and glow radius of a Source 1 sprite.</summary>
+        [VertexAttributeName("vTEXCOORD3", "vFoliageParams", "vSpriteFade", Semantic = "TEXCOORD", SemanticIndex = 3)]
         TexCoord3,
 
         /// <summary>Layer blend color.</summary>

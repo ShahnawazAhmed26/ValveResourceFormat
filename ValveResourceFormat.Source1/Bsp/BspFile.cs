@@ -192,10 +192,13 @@ internal sealed class BspFile
             return;
         }
 
-        if (lumpOffset < 0 || length < 0 || (long)lumpOffset + length > file.Length)
+        if (lumpOffset < 0 || length < 0 || lumpOffset > file.Length)
         {
             throw new InvalidDataException("Lump file data lies outside the file.");
         }
+
+        // The game reads as much of the lump as the file has
+        length = Math.Min(length, file.Length - lumpOffset);
 
         var type = (LumpType)lumpIndex;
 

@@ -9,8 +9,8 @@ in vec3 vNormalOut;
 in vec2 vTexCoordOut;
 in vec4 vVertexColorOut;
 
-uniform sampler2D g_tColor; // SrgbRead(true) RepresentativeTexture
-uniform sampler2D g_tDetail;
+uniform sampler2D g_tColor; // SrgbRead(true) Sampler(UserConfig) RepresentativeTexture Default(White)
+uniform sampler2D g_tDetail; // Sampler(UserConfig) Default(White)
 
 uniform vec3 g_vColorTint = vec3(1.0);
 

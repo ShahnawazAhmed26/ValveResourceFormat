@@ -200,6 +200,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
             Realtime = seqFlags.GetBooleanProperty("m_bLegacyRealtime");
             Autoplay = seqFlags.GetBooleanProperty("m_bAutoplay");
             AnimGraphAdditive = animFlags?.GetBooleanProperty("m_bAnimGraphAdditive") ?? false;
+            HoldsLastFrame = !IsLooping;
 
             IsAdditive = Delta || AnimGraphAdditive;
 
@@ -245,6 +246,11 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
                 if (layer.LocalReference >= 0 && layer.LocalReference < sequenceNameArray.Length)
                 {
                     layer.ReferencedAnimationName = sequenceNameArray[layer.LocalReference];
+                }
+
+                if (layer.LocalPose >= 0 && layer.LocalPose < poseParamNames.Length)
+                {
+                    layer.PoseParameterName = poseParamNames[layer.LocalPose];
                 }
 
                 AutoLayers[i] = layer;

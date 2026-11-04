@@ -20,7 +20,7 @@ namespace ValveResourceFormat.ResourceTypes
     /// Represents a model resource containing meshes, skeleton, and animations.
     /// </summary>
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/modellib/PermModelData_t">PermModelData_t</seealso>
-    public class Model : KeyValuesOrNTRO
+    public partial class Model : KeyValuesOrNTRO
     {
         /// <summary>
         /// Gets the model name.

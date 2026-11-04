@@ -109,6 +109,11 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         }
 
         /// <summary>
+        /// Gets whether this animation holds its last frame when it ends, whatever the looping setting of the player is.
+        /// </summary>
+        public bool HoldsLastFrame { get; protected init; }
+
+        /// <summary>
         /// Gets or sets whether this animation is additive: its frames are per-bone deltas meant to be
         /// composed over a base pose. AG2 clips and AG1 sequences both carry what their own data says; the
         /// owning model then adds the sequences its AG1 graph feeds into additive slots, which is not

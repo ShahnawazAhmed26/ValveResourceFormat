@@ -7,7 +7,7 @@ in vec3 vFragPosition;
 in vec2 vTexCoordOut;
 in vec4 vVertexColorOut;
 
-uniform sampler2D g_tColor; // SrgbRead(true) RepresentativeTexture
+uniform sampler2D g_tColor; // SrgbRead(true) Sampler(UserConfig) RepresentativeTexture Default(White)
 
 uniform vec3 g_vColorTint = vec3(1.0); // SrgbRead(true)
 

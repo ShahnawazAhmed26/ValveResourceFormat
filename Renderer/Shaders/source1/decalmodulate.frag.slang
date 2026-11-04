@@ -6,7 +6,7 @@
 in vec2 vTexCoordOut;
 
 // Read as stored: the blend multiplies the framebuffer by this gamma space value twice, so 0.5 leaves it as it is
-uniform sampler2D g_tColor; // RepresentativeTexture
+uniform sampler2D g_tColor; // Sampler(UserConfig) RepresentativeTexture Default(White)
 
 void main()
 {

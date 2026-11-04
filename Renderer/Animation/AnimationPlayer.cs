@@ -146,6 +146,7 @@ namespace ValveResourceFormat.Renderer
             Pose = pose;
             FrameCache = new(skeleton, flexControllers);
             BlendedFrame = new(skeleton, flexControllers);
+            LocalLayerFrame = new(skeleton, flexControllers);
             AdditiveFrame = new(skeleton, flexControllers);
         }
 
@@ -173,6 +174,10 @@ namespace ValveResourceFormat.Renderer
             if (!IsPaused && activeClip != null)
             {
                 UpdateClips(timeStep);
+            }
+            else if (activeClip != null)
+            {
+                UpdateDrivenClips();
             }
 
             AnimationFrame = GetFrame();

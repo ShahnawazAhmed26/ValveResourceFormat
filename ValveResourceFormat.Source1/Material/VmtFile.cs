@@ -340,6 +340,13 @@ internal sealed partial class VmtFile
     }
 
     public static string NormalizePath(string path, string extension)
+        => TryNormalizePath(path, extension) ?? throw new InvalidDataException($"VMT resource path traverses its mount: {path}");
+
+    /// <summary>
+    /// Normalizes a path like <see cref="NormalizePath"/>, but returns <see langword="null"/> for a path that climbs
+    /// out of its mount, which the game never finds.
+    /// </summary>
+    public static string? TryNormalizePath(string path, string extension)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -362,7 +369,7 @@ internal sealed partial class VmtFile
             {
                 if (normalized.Count == 0 || (normalized.Count == 1 && normalized[0].Equals("materials", StringComparison.OrdinalIgnoreCase)))
                 {
-                    throw new InvalidDataException($"VMT resource path traverses its mount: {path}");
+                    return null;
                 }
 
                 normalized.RemoveAt(normalized.Count - 1);

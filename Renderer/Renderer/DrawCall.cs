@@ -95,6 +95,16 @@ namespace ValveResourceFormat.Renderer
             _ => throw new UnreachableException(nameof(IndexType))
         };
 
+        /// <summary>Gets the index type of an index buffer whose elements have a given size.</summary>
+        /// <param name="elementSizeInBytes">The size in bytes of a single index element.</param>
+        /// <returns>The index type.</returns>
+        public static DrawElementsType GetIndexType(uint elementSizeInBytes) => elementSizeInBytes switch
+        {
+            2 => DrawElementsType.UnsignedShort,
+            4 => DrawElementsType.UnsignedInt,
+            _ => throw new UnexpectedMagicException("Unsupported index type", elementSizeInBytes, nameof(elementSizeInBytes)),
+        };
+
         /// <summary>Replaces the material and rebuilds the vertex array state.</summary>
         /// <param name="newMaterial">The new material to assign.</param>
         public void SetNewMaterial(RenderMaterial newMaterial)

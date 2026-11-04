@@ -6,12 +6,12 @@
 #include "common_ps.slang"
 #include "../common/lighting_common.slang"
 #include "../common/fullbright.slang"
+#include "../common/lighting_lpv.slang"
 
-uniform sampler2D g_tLightWarp;
-uniform sampler2D g_tPhongWarp;
-uniform sampler2D g_tPhongExponent;
+uniform sampler2D g_tLightWarp; // Sampler(Clamp) Default(White)
+uniform sampler2D g_tPhongWarp; // Sampler(Clamp) Default(White)
+uniform sampler2D g_tPhongExponent; // Default(White)
 
-uniform int F_AMBIENT_CUBE;
 uniform int F_LIGHTWARP;
 uniform int F_HALF_LAMBERT;
 uniform int F_PHONG;
@@ -19,31 +19,15 @@ uniform int F_PHONG_EXPONENT_TEXTURE;
 uniform int F_PHONG_WARP;
 uniform int F_RIM_LIGHT;
 
-// Ambient cube faces: +X, -X, +Y, -Y, +Z, -Z in world space
-uniform vec4 g_vAmbientCube0 = vec4(0.0);
-uniform vec4 g_vAmbientCube1 = vec4(0.0);
-uniform vec4 g_vAmbientCube2 = vec4(0.0);
-uniform vec4 g_vAmbientCube3 = vec4(0.0);
-uniform vec4 g_vAmbientCube4 = vec4(0.0);
-uniform vec4 g_vAmbientCube5 = vec4(0.0);
-
 uniform float g_flRimLightExponent = 4.0;
 
 #define SOURCE1_MAX_LOCAL_LIGHTS 4
 
+// The ambient cube the map baked at the lighting origin of the object, or the sky where no volume covers it.
+// A model is lit by one cube, so every fragment of it gets the same ambient.
 vec3 GetSource1Ambient(vec3 normal)
 {
-    if (F_AMBIENT_CUBE == 0)
-    {
-        return max(GetSkyAmbientLighting(normal), vec3(0.0));
-    }
-
-    vec3 squared = normal * normal;
-    vec3 xColor = normal.x >= 0.0 ? g_vAmbientCube0.rgb : g_vAmbientCube1.rgb;
-    vec3 yColor = normal.y >= 0.0 ? g_vAmbientCube2.rgb : g_vAmbientCube3.rgb;
-    vec3 zColor = normal.z >= 0.0 ? g_vAmbientCube4.rgb : g_vAmbientCube5.rgb;
-
-    return squared.x * xColor + squared.y * yColor + squared.z * zColor;
+    return max(SampleLightProbeIrradiance(GetObjectLightingOrigin(), normal), vec3(0.0));
 }
 
 // The scalar diffuse term of a light, through the light warp texture when the material has one
@@ -146,10 +130,29 @@ void AddSource1SceneLights(inout vec3 diffuse, inout vec3 specular, inout vec3 r
     }
 }
 
-// The scene lit diffuse term of a surface, which never comes out black unless the map gave it an ambient cube that is
+// The phong fresnel, a piecewise curve of the traditional fresnel through the min, mid and max of the ranges
+float GetSource1FresnelRanges(vec3 normal, vec3 eyeDirection, vec4 ranges)
+{
+    float lowSlope = (ranges.y - ranges.x) * 2.0;
+    float highSlope = (ranges.z - ranges.y) * 2.0;
+
+    float fresnel = saturate(1.0 - dot(normal, eyeDirection));
+    fresnel = fresnel * fresnel - 0.5;
+
+    if (fresnel >= 0.0)
+    {
+        return ranges.y + highSlope * fresnel;
+    }
+
+    return ranges.y + lowSlope * fresnel;
+}
+
+// The scene lit diffuse term of a surface, which never comes out black unless a volume of the map covers it and is that dark
 vec3 GetSource1FullbrightFallback(vec3 lighting, vec3 normal)
 {
-    if (F_AMBIENT_CUBE == 0 && Max3(lighting) < 0.001)
+    bool covered = GetLightProbeSample(GetObjectLightingOrigin(), normal).Coverage > 0.0;
+
+    if (!covered && Max3(lighting) < 0.001)
     {
         return vec3(GetFullbrightAxisLight(normal));
     }

@@ -4,11 +4,17 @@
 #define VRF_SOURCE1_ENVMAP_PS_INCLUDE
 
 #include "common_ps.slang"
+#include "../common/lighting_constants.slang"
+#include "../common/object_data.slang"
+#include "../common/envmap_data.slang"
 
-uniform samplerCube g_tEnvMap; // SrgbRead(true)
-uniform sampler2D g_tEnvMapMask;
+uniform samplerCube g_tEnvMap; // SrgbRead(true) Default(Cube)
+uniform samplerCubeArray g_tEnvironmentMap; // SrgbRead(true) reserved
+uniform sampler2D g_tEnvMapMask; // Sampler(UserConfig)
 
 uniform int F_ENVMAP;
+// 1 when the material reflects env_cubemap, which is the environment map of the scene node, and 0 when it names a cube map
+uniform int F_ENVMAP_SCENE;
 uniform int F_ENVMAP_MASK;
 uniform int F_NORMALMAP_ALPHA_ENVMAP_MASK;
 // Linear, converted by the material for the shaders that read it in gamma space
@@ -17,9 +23,6 @@ uniform float g_flEnvMapContrast = 0.0;
 uniform float g_flEnvMapSaturation = 1.0;
 uniform float g_flEnvMapFresnel = 0.0;
 uniform float g_flFresnelReflection = 1.0;
-
-// -1 flips the bitangent of meshes that follow the Source 2 tangent convention
-uniform float g_flBitangentSign = 1.0;
 
 // The three directions the bumped lightmaps are lit from, in tangent space
 const vec3 SOURCE1_BUMP_BASIS[3] = vec3[3](
@@ -46,7 +49,7 @@ mat3 GetSource1TangentFrame(vec3 normal, vec4 tangent, vec3 position, vec2 texCo
     if (dot(tangent.xyz, tangent.xyz) >= 0.25)
     {
         vec3 tangentDirection = normalize(tangent.xyz - normal * dot(tangent.xyz, normal));
-        vec3 bitangent = cross(normal, tangentDirection) * tangent.w * g_flBitangentSign;
+        vec3 bitangent = cross(normal, tangentDirection) * -tangent.w;
         return mat3(tangentDirection, bitangent, normal);
     }
 
@@ -88,13 +91,37 @@ vec3 GetSource1EnvmapMask(vec2 texCoord, float baseAlpha, float normalAlpha)
     return factor;
 }
 
+// The environment map of the scene node alone, black for a node without one
+vec3 SampleSource1SceneEnvmap(vec3 direction)
+{
+    uint envMapIndex = GetObjectLightingData() >> 16u;
+
+    if (g_vEnvMapSizeConstants.y == 0.0 || envMapIndex == 0xFFFFu)
+    {
+        return vec3(0.0);
+    }
+
+    return texture(g_tEnvironmentMap, vec4(direction, float(envMaps[envMapIndex].ArrayIndex))).rgb;
+}
+
+// The cube map the material reflects, in the direction the reflection points to
+vec3 SampleSource1Cube(vec3 direction)
+{
+    if (F_ENVMAP_SCENE != 0)
+    {
+        return SampleSource1SceneEnvmap(direction);
+    }
+
+    return texture(g_tEnvMap, direction).rgb;
+}
+
 // The cube map seen through the surface, not yet masked or tinted
 vec3 SampleSource1Envmap(vec3 normal, vec3 position)
 {
     vec3 eye = g_vCameraPositionWs - position;
     vec3 reflection = 2.0 * normal * dot(normal, eye) - eye * dot(normal, normal);
 
-    return texture(g_tEnvMap, reflection).rgb;
+    return SampleSource1Cube(reflection);
 }
 
 // The cube map seen through the surface, tinted and adjusted but not yet faded by a fresnel term

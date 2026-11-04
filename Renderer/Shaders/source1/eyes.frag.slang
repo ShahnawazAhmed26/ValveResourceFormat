@@ -6,8 +6,8 @@
 in vec3 vFragPosition;
 in vec2 vTexCoordOut;
 
-uniform sampler2D g_tColor; // SrgbRead(true) RepresentativeTexture
-uniform sampler2D g_tIris; // SrgbRead(true)
+uniform sampler2D g_tColor; // SrgbRead(true) Sampler(UserConfig) RepresentativeTexture Default(White)
+uniform sampler2D g_tIris; // SrgbRead(true) Default(White)
 
 // Up direction of the eyeball. It is used as it is stored in the model, which is relative to the bone.
 uniform vec3 g_vEyeUp = vec3(0.0, 0.0, 1.0);

@@ -6,6 +6,7 @@ using GUI.Utils;
 using ValveResourceFormat.GoldSrc;
 using ValveResourceFormat.Renderer;
 using ValveResourceFormat.Renderer.GoldSrc;
+using ValveResourceFormat.Renderer.SceneNodes;
 
 namespace GUI.Types.GLViewers
 {
@@ -20,11 +21,21 @@ namespace GUI.Types.GLViewers
         public GoldSrcMdlFile Model { get; } = model;
 
         private GoldSrcModelSceneNode? modelNode;
+        private ModelSceneNode? source2Node;
+        private GoldSrcModelCache? source2MaterialCache;
+        private readonly List<string> source2MaterialPaths = [];
         private ComboBox? sequenceComboBox;
         private CheckBox? autoplayCheckBox;
 
         public override void Dispose()
         {
+            foreach (var path in source2MaterialPaths)
+            {
+                Scene.RendererContext.MaterialLoader.RemoveMaterial(path);
+            }
+
+            source2MaterialCache?.RemoveUser();
+
             base.Dispose();
 
             autoplayCheckBox?.Dispose();
@@ -35,13 +46,69 @@ namespace GUI.Types.GLViewers
         {
             base.LoadScene();
 
+            if (Environment.GetEnvironmentVariable("VRF_S1_S2MODEL") == "1")
+            {
+                var modelName = $"goldsrc_model_{Guid.NewGuid():N}";
+
+                // The studio shader reads texel coordinates, so the converted model keeps them unnormalized
+                var source2Model = GoldSrcModelConverter.Convert(Model, modelName, normalizeTexCoords: false);
+
+                RegisterMaterials(modelName);
+
+                source2Node = new ModelSceneNode(Scene, source2Model);
+
+                foreach (var animation in GoldSrcSequenceAnimation.CreateAll(Model))
+                {
+                    source2Node.AddAnimation(animation);
+                }
+
+                Scene.Add(source2Node, true);
+                return;
+            }
+
             modelNode = new GoldSrcModelSceneNode(Scene, Model);
             Scene.Add(modelNode, true);
+        }
+
+        // The converted model refers to its textures by name, and the textures live in the model file
+        private void RegisterMaterials(string modelName)
+        {
+            var textureSource = GoldSrcModelConverter.GetTextureSource(Model);
+            source2MaterialCache = new GoldSrcModelCache(Scene, null);
+            source2MaterialCache.AddUser();
+
+            for (var i = 0; i < textureSource.Textures.Length; i++)
+            {
+                var material = source2MaterialCache.GetMaterial(textureSource, i, GoldSrcRenderSettings.Default, GoldSrcStudioLight.Default);
+                var path = GoldSrcModelConverter.GetMaterialPath(modelName, textureSource, i);
+
+                Scene.RendererContext.MaterialLoader.AddMaterial(path, material);
+                source2MaterialPaths.Add(path);
+            }
+        }
+
+        private List<BodyGroupChoices> GetBodyGroups()
+        {
+            return Model.BodyParts
+                .Select(static part => new BodyGroupChoices(part.Name, [.. part.Models.Select(static model => model.Name)]))
+                .ToList();
         }
 
         protected override void AddUiControls()
         {
             Debug.Assert(UiControl != null);
+
+            if (source2Node != null)
+            {
+                Input.OrbitTargetProvider = () => source2Node.BoundingBox.Center;
+
+                this.AddConvertedModelControls(source2Node, GetBodyGroups());
+
+                if (source2Node.Animations.Count > 0)
+                {
+                    (sequenceComboBox, autoplayCheckBox) = this.AddConvertedAnimationControls(source2Node);
+                }
+            }
 
             if (modelNode != null)
             {
@@ -66,11 +133,7 @@ namespace GUI.Types.GLViewers
 
             using var _ = UiControl.BeginGroup("Model");
 
-            var bodyGroups = Model.BodyParts
-                .Select(static part => new BodyGroupChoices(part.Name, [.. part.Models.Select(static model => model.Name)]))
-                .ToList();
-
-            this.AddSkinAndBodyGroupControls(node.SkinCount, node.Skin, node.SetSkin, bodyGroups, node.GetBodyGroup, node.SetBodyGroup);
+            this.AddSkinAndBodyGroupControls(node.SkinCount, node.Skin, node.SetSkin, GetBodyGroups(), node.GetBodyGroup, node.SetBodyGroup);
         }
 
         private void AddAnimationControls(GoldSrcModelSceneNode node)

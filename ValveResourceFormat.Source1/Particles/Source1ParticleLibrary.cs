@@ -79,8 +79,6 @@ internal sealed class Source1ParticleLibrary
             }
 
             var particleSystem = Source1ParticleConverter.Convert(system, ReadMaterial, logger, reportedFunctions);
-            particleSystem.Name = system.Name;
-            particleSystem.ChildResolver = GetParticleSystem;
             converted[name] = particleSystem;
 
             return particleSystem;
@@ -116,7 +114,7 @@ internal sealed class Source1ParticleLibrary
 
         var values = vmt.Values;
         var baseTexture = values.String("$basetexture");
-        var texture = string.IsNullOrWhiteSpace(baseTexture) ? null : VmtFile.NormalizePath(baseTexture, ".vtf");
+        var texture = string.IsNullOrWhiteSpace(baseTexture) ? null : VmtFile.TryNormalizePath(baseTexture, ".vtf");
 
         return new PcfMaterialInfo(
             texture,

@@ -506,7 +506,7 @@ public abstract class BaseEntity
         }
 
         var rendererContext = scene.RendererContext;
-        var particleSystem = rendererContext.LoadParticleSystem(effectName);
+        var particleSystem = rendererContext.FileLoader.LoadFileCompiled(effectName)?.DataBlock as ParticleSystem;
 
         if (particleSystem == null)
         {

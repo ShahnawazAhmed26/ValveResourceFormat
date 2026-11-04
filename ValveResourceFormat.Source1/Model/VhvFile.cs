@@ -11,7 +11,7 @@ internal sealed class VhvFile
 {
     private const int SupportedVersion = 2;
     private const int HeaderSize = 40;
-    private const int MeshHeaderSize = 32;
+    private const int MeshHeaderSize = 28;
     private const int BytesPerVertex = 4;
 
     // Vertex lighting is stored as pow(linear, 1 / 2.2) / 2, so it covers linear values from 0 to 4
@@ -20,18 +20,21 @@ internal sealed class VhvFile
 
     private static readonly float[] ChannelValues = CreateChannelValues();
 
-    private readonly byte[][] stripGroups;
+    // The most levels of detail a model has
+    private const int MaxLods = 8;
+
+    private readonly byte[][][] stripGroups;
 
     /// <summary>Gets the checksum of the model the lighting was baked for.</summary>
     public int Checksum { get; }
 
-    private VhvFile(int checksum, byte[][] stripGroups)
+    private VhvFile(int checksum, byte[][][] stripGroups)
     {
         Checksum = checksum;
         this.stripGroups = stripGroups;
     }
 
-    /// <summary>Reads the LOD 0 strip groups of a file from the rest of a stream.</summary>
+    /// <summary>Reads the strip groups of a file from the rest of a stream.</summary>
     /// <param name="stream">The stream of the file.</param>
     /// <returns>The file, or null when it is not a per vertex color file.</returns>
     public static VhvFile? Parse(Stream stream)
@@ -41,7 +44,7 @@ internal sealed class VhvFile
         return Parse(Source1Streams.ReadAll(stream));
     }
 
-    /// <summary>Reads the LOD 0 strip groups of a file.</summary>
+    /// <summary>Reads the strip groups of a file.</summary>
     /// <param name="data">The file contents.</param>
     /// <returns>The file, or null when it is not a per vertex color file.</returns>
     /// <exception cref="UnexpectedMagicException">The version of the file is not supported.</exception>
@@ -68,7 +71,12 @@ internal sealed class VhvFile
             return null;
         }
 
-        var groups = new List<byte[]>();
+        var groups = new List<byte[]>[MaxLods];
+
+        for (var i = 0; i < groups.Length; i++)
+        {
+            groups[i] = [];
+        }
 
         for (var i = 0; i < meshCount; i++)
         {
@@ -82,13 +90,20 @@ internal sealed class VhvFile
                 return null;
             }
 
-            if (lod == 0)
+            if ((uint)lod < (uint)groups.Length)
             {
-                groups.Add(data.Slice(offset, vertexCount * BytesPerVertex).ToArray());
+                groups[lod].Add(data.Slice(offset, vertexCount * BytesPerVertex).ToArray());
             }
         }
 
-        return new VhvFile(checksum, [.. groups]);
+        var stripGroups = new byte[groups.Length][][];
+
+        for (var i = 0; i < stripGroups.Length; i++)
+        {
+            stripGroups[i] = [.. groups[i]];
+        }
+
+        return new VhvFile(checksum, stripGroups);
     }
 
     /// <summary>Gets the linear light baked into the vertices of a mesh.</summary>
@@ -98,6 +113,12 @@ internal sealed class VhvFile
     {
         ArgumentNullException.ThrowIfNull(mesh);
 
+        if ((uint)mesh.Lod >= (uint)stripGroups.Length)
+        {
+            return null;
+        }
+
+        var lodStripGroups = stripGroups[mesh.Lod];
         var outputByOriginal = mesh.OutputByOriginalVertexId;
         var colors = new Vector3[mesh.Vertices.Length];
 
@@ -106,12 +127,12 @@ internal sealed class VhvFile
             var groupIndex = mesh.FirstStripGroup + group;
             var vertexIds = mesh.StripGroupVertexIds[group];
 
-            if (groupIndex >= stripGroups.Length || stripGroups[groupIndex].Length != vertexIds.Length * BytesPerVertex)
+            if (groupIndex >= lodStripGroups.Length || lodStripGroups[groupIndex].Length != vertexIds.Length * BytesPerVertex)
             {
                 return null;
             }
 
-            var bytes = stripGroups[groupIndex];
+            var bytes = lodStripGroups[groupIndex];
 
             for (var i = 0; i < vertexIds.Length; i++)
             {

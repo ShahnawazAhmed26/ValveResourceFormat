@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -35,8 +36,22 @@ internal sealed partial class MdlFile
     public string[] BodyPartNames { get; }
     public StudioModel[][] Models { get; }
     public StudioMesh[][][] Meshes { get; }
+    public Source1Flex[][][][] MeshFlexes { get; }
+
+    public string[] FlexDescNames { get; }
+    public Source1FlexController[] FlexControllers { get; }
+    public Source1FlexRule[] FlexRules { get; }
+    public List<Source1Eyelid> Eyelids { get; } = [];
 
     public HitboxSet[] HitboxSets { get; }
+
+    // Size of a vertex animation, followed by a wrinkle delta in a flex of the wrinkle type
+    private const int VertexAnimSize = 16;
+    private const int VertexAnimWrinkleSize = 18;
+    private const byte VertexAnimTypeWrinkle = 1;
+
+    // Scale of the fixed point wrinkle deltas when the header does not set one
+    private const float DefaultVertexAnimFixedPointScale = 1f / 4096f;
 
     internal readonly record struct HitboxSet(string Name, Hitbox[] Hitboxes);
     internal readonly record struct Hitbox(string Name, int Bone, int Group, Vector3 Min, Vector3 Max);
@@ -69,11 +84,12 @@ internal sealed partial class MdlFile
         BodyPartNames = new string[Hdr.NumBodyParts];
         Models = new StudioModel[Hdr.NumBodyParts][];
         Meshes = new StudioMesh[Hdr.NumBodyParts][][];
-        MeshFlexes = new MeshFlex[Hdr.NumBodyParts][][][];
-        Eyeballs = new StudioEyeball[Hdr.NumBodyParts][][];
+        MeshFlexes = new Source1Flex[Hdr.NumBodyParts][][][];
         ReadBodyParts(data);
-        ReadFlexData(data);
-        ReadMaxEyeDeflection(data);
+
+        FlexDescNames = ReadFlexDescNames(data);
+        FlexControllers = ReadFlexControllers(data);
+        FlexRules = ReadFlexRules(data);
 
         Bones = LumpReader<StudioBone>.ReadLumpAt(data, Hdr.BoneIndex, Hdr.NumBones);
         BoneNames = new string[Bones.Length];
@@ -224,29 +240,168 @@ internal sealed partial class MdlFile
             var modelsStart = partStart + part.ModelIndex;
             var models = LumpReader<StudioModel>.ReadLumpAt(data, modelsStart, part.NumModels);
             var meshes = new StudioMesh[models.Length][];
-            var flexes = new MeshFlex[models.Length][][];
-            var eyeballs = new StudioEyeball[models.Length][];
+            var meshFlexes = new Source1Flex[models.Length][][];
 
             for (var modelIndex = 0; modelIndex < models.Length; modelIndex++)
             {
                 var modelStart = modelsStart + ((long)modelIndex * modelSize);
-                eyeballs[modelIndex] = ReadEyeballs(data, modelStart, models[modelIndex]);
                 var meshesStart = modelStart + models[modelIndex].MeshIndex;
-                meshes[modelIndex] = LumpReader<StudioMesh>.ReadLumpAt(data, meshesStart, models[modelIndex].NumMeshes);
-                flexes[modelIndex] = new MeshFlex[meshes[modelIndex].Length][];
+                var modelMeshes = LumpReader<StudioMesh>.ReadLumpAt(data, meshesStart, models[modelIndex].NumMeshes);
 
-                for (var meshIndex = 0; meshIndex < meshes[modelIndex].Length; meshIndex++)
+                meshes[modelIndex] = modelMeshes;
+                meshFlexes[modelIndex] = new Source1Flex[modelMeshes.Length][];
+
+                var eyeballsStart = modelStart + models[modelIndex].EyeBallIndex;
+                ReadEyelids(LumpReader<StudioEyeball>.ReadLumpAt(data, eyeballsStart, models[modelIndex].NumEyeBalls));
+
+                for (var meshIndex = 0; meshIndex < modelMeshes.Length; meshIndex++)
                 {
                     var meshStart = meshesStart + ((long)meshIndex * meshSize);
-                    flexes[modelIndex][meshIndex] = ReadMeshFlexes(data, meshStart, meshes[modelIndex][meshIndex]);
+                    meshFlexes[modelIndex][meshIndex] = ReadMeshFlexes(data, meshStart, modelMeshes[meshIndex]);
                 }
             }
 
             Models[partIndex] = models;
             Meshes[partIndex] = meshes;
-            MeshFlexes[partIndex] = flexes;
-            Eyeballs[partIndex] = eyeballs;
+            MeshFlexes[partIndex] = meshFlexes;
         }
+    }
+
+    // Every sub-model has its own copy of the eyeballs, so a lid is kept once
+    private void ReadEyelids(StudioEyeball[] eyeballs)
+    {
+        foreach (var eyeball in eyeballs)
+        {
+            if (eyeball.NonFacs)
+            {
+                continue;
+            }
+
+            AddEyelid(eyeball.UpperLidFlexDesc, eyeball.Radius, eyeball.UpperFlexDescs, eyeball.UpperTargets);
+            AddEyelid(eyeball.LowerLidFlexDesc, eyeball.Radius, eyeball.LowerFlexDescs, eyeball.LowerTargets);
+        }
+    }
+
+    private void AddEyelid(int flexDesc, float radius, LidFlexDescs poses, Vector3 heights)
+    {
+        if (flexDesc < 0 || Eyelids.Exists(eyelid => eyelid.FlexDesc == flexDesc))
+        {
+            return;
+        }
+
+        Eyelids.Add(new Source1Eyelid(flexDesc, radius, poses.Raiser, poses.Neutral, poses.Lowerer, heights));
+    }
+
+    private Source1Flex[] ReadMeshFlexes(byte[] data, long meshStart, StudioMesh mesh)
+    {
+        var flexesStart = meshStart + mesh.FlexIndex;
+        var flexes = LumpReader<StudioFlex>.ReadLumpAt(data, flexesStart, mesh.NumFlexes);
+        var flexSize = Marshal.SizeOf<StudioFlex>();
+        var result = new Source1Flex[flexes.Length];
+
+        var fixedPointScale = (Hdr.Flags & (int)StudioFlags.VertAnimFixedPointScale) != 0
+            ? Hdr.VertAnimFixedPointScale
+            : DefaultVertexAnimFixedPointScale;
+
+        for (var i = 0; i < flexes.Length; i++)
+        {
+            var flex = flexes[i];
+            var isWrinkle = flex.VertexAnimType == VertexAnimTypeWrinkle;
+            var animSize = isWrinkle ? VertexAnimWrinkleSize : VertexAnimSize;
+            var animsStart = flexesStart + ((long)i * flexSize) + flex.VertexIndex;
+            var anims = LumpReader<byte>.ReadLumpAt(data, animsStart, flex.NumVertices * animSize);
+            var vertices = new Source1FlexVertex[flex.NumVertices];
+
+            for (var j = 0; j < vertices.Length; j++)
+            {
+                var anim = anims.AsSpan(j * animSize, animSize);
+                var wrinkle = 0f;
+
+                if (isWrinkle)
+                {
+                    wrinkle = BinaryPrimitives.ReadInt16LittleEndian(anim[16..]) * fixedPointScale;
+                }
+
+                vertices[j] = new Source1FlexVertex(
+                    BinaryPrimitives.ReadUInt16LittleEndian(anim),
+                    anim[2] / 255f,
+                    anim[3] / 255f,
+                    ReadHalfVector(anim[4..]),
+                    ReadHalfVector(anim[10..]),
+                    wrinkle);
+            }
+
+            result[i] = new Source1Flex
+            {
+                FlexDesc = flex.FlexDesc,
+
+                // Flex descriptor 0 cannot be the right side of a stereo flex, so 0 means there is none
+                FlexPair = flex.FlexPair == 0 ? -1 : flex.FlexPair,
+                Targets = flex.Targets,
+                Vertices = vertices,
+            };
+        }
+
+        return result;
+    }
+
+    private static Vector3 ReadHalfVector(ReadOnlySpan<byte> data)
+    {
+        return new Vector3(
+            (float)BinaryPrimitives.ReadHalfLittleEndian(data),
+            (float)BinaryPrimitives.ReadHalfLittleEndian(data[2..]),
+            (float)BinaryPrimitives.ReadHalfLittleEndian(data[4..]));
+    }
+
+    private string[] ReadFlexDescNames(byte[] data)
+    {
+        var offsets = LumpReader<int>.ReadLumpAt(data, Hdr.FlexDescOffset, Hdr.NumFlexDesc);
+        var names = new string[offsets.Length];
+
+        for (var i = 0; i < offsets.Length; i++)
+        {
+            var start = Hdr.FlexDescOffset + ((long)i * sizeof(int));
+            names[i] = ReadCString(data, start + offsets[i]);
+        }
+
+        return names;
+    }
+
+    private Source1FlexController[] ReadFlexControllers(byte[] data)
+    {
+        var controllers = LumpReader<StudioFlexController>.ReadLumpAt(data, Hdr.FlexControllerOffset, Hdr.NumFlexControllers);
+        var controllerSize = Marshal.SizeOf<StudioFlexController>();
+        var result = new Source1FlexController[controllers.Length];
+
+        for (var i = 0; i < controllers.Length; i++)
+        {
+            var controller = controllers[i];
+            var start = Hdr.FlexControllerOffset + ((long)i * controllerSize);
+            var type = ReadCString(data, start + controller.TypeIndex);
+            var name = ReadCString(data, start + controller.NameIndex);
+
+            result[i] = new Source1FlexController(name, type, controller.Min, controller.Max);
+        }
+
+        return result;
+    }
+
+    private Source1FlexRule[] ReadFlexRules(byte[] data)
+    {
+        var rules = LumpReader<StudioFlexRule>.ReadLumpAt(data, Hdr.FlexRuleOffset, Hdr.NumFlexRules);
+        var ruleSize = Marshal.SizeOf<StudioFlexRule>();
+        var result = new Source1FlexRule[rules.Length];
+
+        for (var i = 0; i < rules.Length; i++)
+        {
+            var rule = rules[i];
+            var start = Hdr.FlexRuleOffset + ((long)i * ruleSize);
+            var ops = LumpReader<StudioFlexOp>.ReadLumpAt(data, start + rule.OpIndex, rule.NumOps);
+
+            result[i] = new Source1FlexRule(rule.Flex, Array.ConvertAll(ops, op => new Source1FlexOp(op.Op, op.Data)));
+        }
+
+        return result;
     }
 
     private HitboxSet[] ReadHitboxSets(byte[] data)

@@ -10,7 +10,6 @@ using ValveResourceFormat.Renderer.Entities;
 using ValveResourceFormat.Renderer.SceneNodes;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
-using ValveResourceFormat.Source1.Entities;
 using ValveResourceFormat.Utils;
 
 namespace ValveResourceFormat.Renderer.Editor.Entities;
@@ -61,17 +60,14 @@ public sealed class HammerEntityVisuals : IEntityToolVisuals
     }
 
     /// <summary>
-    /// Initializes the visuals for the entities of what a renderer context shows. A Source 1 game has no game info the
-    /// file loader finds, so its classes are found by the Steam app id of its file system.
+    /// Initializes the visuals for the entities of a game whose classes the file loader does not find.
     /// </summary>
-    /// <param name="rendererContext">The context of what is shown.</param>
-    public HammerEntityVisuals(RendererContext rendererContext)
+    /// <param name="entityClasses">The entity classes the entities are drawn by.</param>
+    public HammerEntityVisuals(EntityClassTable entityClasses)
     {
-        ArgumentNullException.ThrowIfNull(rendererContext);
+        ArgumentNullException.ThrowIfNull(entityClasses);
 
-        classes = new Lazy<EntityClassTable>(() => rendererContext.Source1FileSystem is { } fileSystem
-            ? Source1EntityClassCatalog.Get(fileSystem, rendererContext.Logger)
-            : EntityClassCatalog.Get(rendererContext.FileLoader, rendererContext.Logger));
+        classes = new Lazy<EntityClassTable>(entityClasses);
     }
 
     /// <summary>Finds the entity a node is drawn for, with the helpers of its class.</summary>
@@ -122,7 +118,8 @@ public sealed class HammerEntityVisuals : IEntityToolVisuals
     /// <inheritdoc/>
     public SceneNode? CreateStandIn(BaseEntity entity, ObjectTypeFlags flags)
     {
-        if (entity.Data == null)
+        // An entity the world geometry draws needs nothing to stand in for it
+        if (entity.Data == null || entity.Data.GetBooleanProperty("drawnbyworld"))
         {
             return null;
         }

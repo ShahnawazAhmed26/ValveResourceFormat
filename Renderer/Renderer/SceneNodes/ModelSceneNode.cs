@@ -44,6 +44,43 @@ namespace ValveResourceFormat.Renderer.SceneNodes
 
         private readonly (string Name, string[] Materials)[] materialGroups;
 
+        private float[] flexControllerValues = [];
+        private bool[] overriddenFlexControllers = [];
+        private float fadeStartDistanceSquared;
+        private float fadeEndDistanceSquared;
+        private float unfadedAlpha = 1f;
+
+        /// <summary>
+        /// Fades the model out with its distance to the camera, from fully opaque at the start distance to gone at the end distance.
+        /// The fade scales the <see cref="SceneNode.Alpha"/> the node has when this is called, so it belongs in the dynamic partition of the scene.
+        /// </summary>
+        /// <param name="startDistance">The distance where the fade starts. A negative value is an offset from the end distance.</param>
+        /// <param name="endDistance">The distance where the model is gone, or zero for no fade.</param>
+        public void SetDistanceFade(float startDistance, float endDistance)
+        {
+            if (startDistance < 0f)
+            {
+                startDistance = MathF.Max(0f, startDistance + endDistance);
+            }
+
+            fadeStartDistanceSquared = startDistance * startDistance;
+            fadeEndDistanceSquared = endDistance * endDistance;
+            unfadedAlpha = Alpha;
+        }
+
+        private void UpdateDistanceFade(Vector3 cameraLocation)
+        {
+            if (fadeEndDistanceSquared <= 0f)
+            {
+                return;
+            }
+
+            var distanceSquared = BoundingBox.DistanceSquared(cameraLocation);
+            var fade = MathUtils.RemapValClamped(distanceSquared, fadeStartDistanceSquared, fadeEndDistanceSquared, 1f, 0f);
+
+            Alpha = unfadedAlpha * fade;
+        }
+
         /// <summary>Gets the animation graphs the model is bound to, by identifier and resource name. The first is the default.</summary>
         public IReadOnlyList<(string Identifier, string GraphPath)> AnimationGraphReferences { get; }
 
@@ -88,6 +125,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
             }
 
             UpdateBoundingBox();
+
             LoadAnimations(model, embeddedAnimationsOnly: isWorldPreview);
 
             SetCharacterEyeRenderParams();
@@ -310,6 +348,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         {
             UpdateLightingOrigin(context.Camera.Location);
             UpdateAutoLod(context.Camera);
+            UpdateDistanceFade(context.Camera.Location);
             var animationUpdated = AnimationController.Update(context.Timestep);
 
             if (!animationUpdated)
@@ -332,9 +371,45 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         /// <summary>
         /// Pushes the frame's flex controller values, with the constraint driven morphs applied, to every mesh that morphs.
         /// </summary>
-        private void UpdateFlexControllers()
+        private void UpdateFlexControllers() => PushFlexControllers(AnimationController.FlexValues!);
+
+        /// <summary>
+        /// Sets a flex controller to a value that replaces the one animations give it, as a flex slider does.
+        /// </summary>
+        /// <param name="controller">Index of the flex controller in <see cref="Model.FlexControllers"/>.</param>
+        /// <param name="value">The value, which the flex controller's range clamps.</param>
+        public void SetFlexControllerOverride(int controller, float value)
         {
-            var datas = AnimationController.FlexValues!;
+            var controllerCount = Model.FlexControllers.Length;
+
+            if (overriddenFlexControllers.Length != controllerCount)
+            {
+                flexControllerValues = new float[controllerCount];
+                overriddenFlexControllers = new bool[controllerCount];
+            }
+
+            flexControllerValues[controller] = value;
+            overriddenFlexControllers[controller] = true;
+
+            PushFlexControllers(AnimationController.FlexValues ?? []);
+        }
+
+        private void PushFlexControllers(float[] animatedValues)
+        {
+            var datas = animatedValues;
+
+            if (overriddenFlexControllers.Length > 0)
+            {
+                for (var i = 0; i < overriddenFlexControllers.Length; i++)
+                {
+                    if (!overriddenFlexControllers[i])
+                    {
+                        flexControllerValues[i] = i < animatedValues.Length ? animatedValues[i] : 0f;
+                    }
+                }
+
+                datas = flexControllerValues;
+            }
 
             foreach (var renderableMesh in RenderableMeshes)
             {
@@ -470,6 +545,19 @@ namespace ValveResourceFormat.Renderer.SceneNodes
                 Animations[anim.Name] = anim;
                 AnimationPlayer.PrewarmAnimationSounds(anim);
             }
+        }
+
+        /// <summary>
+        /// Makes an animation available for playback on this model, replacing one of the same name.
+        /// </summary>
+        /// <param name="animation">The animation to add, for a skeleton like the one of this model.</param>
+        public void AddAnimation(AnimationBase animation)
+        {
+            ArgumentNullException.ThrowIfNull(animation);
+
+            Animations[animation.Name] = animation;
+            AnimationPlayer.PrewarmAnimationSounds(animation);
+            SetupSkinning();
         }
 
         /// <summary>

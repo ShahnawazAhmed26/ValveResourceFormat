@@ -62,6 +62,21 @@ namespace ValveResourceFormat.Renderer.SceneNodes
                 .Append(choice.MeshGroup)]);
         }
 
+        /// <summary>Makes the choice with an index the one drawn of a body group. Nothing changes when the model has no such choice.</summary>
+        /// <param name="bodyGroup">The name of the body group, in any case.</param>
+        /// <param name="index">The index of the choice in the body group.</param>
+        public void SetBodyGroup(string bodyGroup, int index)
+        {
+            foreach (var choice in GetBodyGroupChoices())
+            {
+                if (choice.Index == index && choice.BodyGroup.Equals(bodyGroup, StringComparison.OrdinalIgnoreCase))
+                {
+                    SetBodyGroupChoice(choice);
+                    return;
+                }
+            }
+        }
+
         /// <summary>Gets the LoD level currently being rendered (auto-selected or forced).</summary>
         public int ActiveLod => lod.ActiveLevel;
 

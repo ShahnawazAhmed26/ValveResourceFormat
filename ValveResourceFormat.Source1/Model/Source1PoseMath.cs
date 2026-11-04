@@ -91,38 +91,6 @@ internal static class Source1PoseMath
         return Normalize(blended);
     }
 
-    /// <summary>Normalized linear interpolation from <paramref name="p"/> towards identity, keeping the sign of its W.</summary>
-    public static Quaternion IdentityBlend(Quaternion p, float t)
-    {
-        var s = 1f - t;
-        var w = p.W >= 0f ? (p.W * s) + t : (p.W * s) - t;
-
-        return Normalize(new Quaternion(p.X * s, p.Y * s, p.Z * s, w));
-    }
-
-    /// <summary>Scales the rotation angle of a quaternion by <paramref name="t"/>.</summary>
-    public static Quaternion Scale(Quaternion p, float t)
-    {
-        var sinom = MathF.Min(MathF.Sqrt((p.X * p.X) + (p.Y * p.Y) + (p.Z * p.Z)), 1f);
-        var sinScaled = MathF.Sin(MathF.Asin(sinom) * t);
-        var vectorScale = sinScaled / (sinom + 1.1920929E-07f);
-        var w = MathF.Sqrt(MathF.Max(0f, 1f - (sinScaled * sinScaled)));
-
-        return new Quaternion(p.X * vectorScale, p.Y * vectorScale, p.Z * vectorScale, p.W < 0f ? -w : w);
-    }
-
-    /// <summary>Applies the additive rotation <paramref name="delta"/> scaled by <paramref name="s"/> in front of <paramref name="value"/>.</summary>
-    public static Quaternion ScaleMultiply(float s, Quaternion delta, Quaternion value)
-    {
-        return Normalize(Multiply(Scale(delta, s), value));
-    }
-
-    /// <summary>Applies the additive rotation <paramref name="delta"/> scaled by <paramref name="s"/> after <paramref name="value"/>.</summary>
-    public static Quaternion MultiplyScale(Quaternion value, float s, Quaternion delta)
-    {
-        return Normalize(Multiply(value, Scale(delta, s)));
-    }
-
     /// <summary>Normalizes a quaternion, leaving a zero quaternion as identity.</summary>
     public static Quaternion Normalize(Quaternion q)
     {

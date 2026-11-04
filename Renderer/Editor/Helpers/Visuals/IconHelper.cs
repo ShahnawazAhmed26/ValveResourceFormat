@@ -28,13 +28,10 @@ public class IconHelper : EntityHelper
     // A yellow frame two pixels wide around a selected icon, over the scene
     private static readonly SpriteBorder SelectionBorder = new(new Vector4(1f, 1f, 0f, 1f), 2f);
 
-    // An icon over the scene is not hidden by anything, and has no border
-    private readonly bool isDrawnOverScene;
-
     private SpriteSceneNode? selectionBorder;
 
     /// <summary>Gets the material of the icon.</summary>
-    private protected string MaterialName { get; }
+    private string MaterialName { get; }
 
     /// <summary>Gets the key of the entity that tints the icon, or <see langword="null"/> when none does.</summary>
     private string? TintKey { get; }
@@ -43,17 +40,10 @@ public class IconHelper : EntityHelper
     /// <remarks>Only where the icon is placed counts, not the size it is drawn at.</remarks>
     public override AABB? ObjectBounds => new(Owner.Transform.Translation, Owner.Transform.Translation);
 
-    private IconHelper(IHelperOwner owner, HelperDeclaration declaration)
-        : this(owner, declaration, GetDeclaredMaterialName(declaration) ?? GetMaterialName(string.Empty), isDrawnOverScene: false)
+    private IconHelper(IHelperOwner owner, HelperDeclaration declaration) : base(owner, declaration)
     {
-    }
-
-    /// <summary>Initializes an icon of a material that is named some other way than a compiled material is.</summary>
-    private protected IconHelper(IHelperOwner owner, HelperDeclaration declaration, string materialName, bool isDrawnOverScene) : base(owner, declaration)
-    {
-        MaterialName = materialName;
-        TintKey = isDrawnOverScene ? null : GetMetadata("tintKey");
-        this.isDrawnOverScene = isDrawnOverScene;
+        MaterialName = GetDeclaredMaterialName(declaration) ?? GetMaterialName(string.Empty);
+        TintKey = GetMetadata("tintKey");
     }
 
     /// <summary>Creates the icon a class declares.</summary>
@@ -62,12 +52,9 @@ public class IconHelper : EntityHelper
     {
         ArgumentNullException.ThrowIfNull(owner);
 
-        return Check(owner, new IconHelper(owner, declaration));
-    }
+        var icon = new IconHelper(owner, declaration);
 
-    private protected static IconHelper? Check(IHelperOwner owner, IconHelper icon)
-    {
-        if (!icon.MaterialExists())
+        if (!CompiledFileExists(owner, icon.MaterialName))
         {
             owner.Scene.RendererContext.Logger.LogDebug("Icon \"{Material}\" of class '{Classname}' does not exist", icon.MaterialName, owner.Classname);
             return null;
@@ -76,29 +63,11 @@ public class IconHelper : EntityHelper
         return icon;
     }
 
-    /// <summary>Gets whether the material of the icon exists.</summary>
-    private protected virtual bool MaterialExists() => CompiledFileExists(Owner, MaterialName);
-
-    /// <summary>Loads the material the icon is drawn with.</summary>
-    /// <param name="shaderArguments">The shader combos the sprite needs.</param>
-    /// <returns>The material, or <see langword="null"/> when it does not load.</returns>
-    private protected virtual RenderMaterial? LoadMaterial(Dictionary<string, byte> shaderArguments)
+    private RenderMaterial? LoadMaterial(string name, Dictionary<string, byte> shaderArguments)
     {
         var rendererContext = Owner.Scene.RendererContext;
 
-        return rendererContext.FileLoader.LoadFileCompiled(MaterialName) is { } resource
-            ? rendererContext.MaterialLoader.LoadMaterial(resource, shaderArguments)
-            : null;
-    }
-
-    /// <summary>Loads the material of the border drawn around the icon while it is selected.</summary>
-    /// <param name="shaderArguments">The shader combos the sprite needs.</param>
-    /// <returns>The material, or <see langword="null"/> when there is no border.</returns>
-    private protected virtual RenderMaterial? LoadBorderMaterial(Dictionary<string, byte> shaderArguments)
-    {
-        var rendererContext = Owner.Scene.RendererContext;
-
-        return rendererContext.FileLoader.LoadFileCompiled(SelectionBorderMaterialName) is { } resource
+        return rendererContext.FileLoader.LoadFileCompiled(name) is { } resource
             ? rendererContext.MaterialLoader.LoadMaterial(resource, shaderArguments)
             : null;
     }
@@ -139,14 +108,15 @@ public class IconHelper : EntityHelper
     {
         var scene = Owner.Scene;
 
-        if (LoadMaterial(SpriteSceneNode.CreateShaderArguments(scene, null)) is not { } material)
+        if (LoadMaterial(MaterialName, SpriteSceneNode.CreateShaderArguments(scene, null)) is not { } material)
         {
             return;
         }
 
         var tint = GetTint();
 
-        if (!isDrawnOverScene && LoadBorderMaterial(SpriteSceneNode.CreateShaderArguments(scene, SelectionBorder)) is { } borderMaterial)
+        if (CompiledFileExists(Owner, SelectionBorderMaterialName)
+            && LoadMaterial(SelectionBorderMaterialName, SpriteSceneNode.CreateShaderArguments(scene, SelectionBorder)) is { } borderMaterial)
         {
             selectionBorder = CreateSprite(borderMaterial, SelectionBorderMaterialName, tint, SelectionBorder);
             selectionBorder.Visible = false;
@@ -168,12 +138,11 @@ public class IconHelper : EntityHelper
     {
         return new SpriteSceneNode(Owner.Scene, material, name, Owner.Transform.Translation, border)
         {
-            // An icon over the scene shows whatever is shown of the entity
-            Layers = isDrawnOverScene ? [] : [HammerEntityVisuals.MarkerLayer],
+            Layers = [HammerEntityVisuals.MarkerLayer],
             Name = name,
             Flags = ObjectTypeFlags.NoShadows,
             KeepsMarkerSize = true,
-            IsDrawnOverScene = isDrawnOverScene || border != null,
+            IsDrawnOverScene = border != null,
             TintAlpha = new Vector4(tint, 1f),
         };
     }

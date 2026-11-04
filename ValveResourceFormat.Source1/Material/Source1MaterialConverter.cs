@@ -1,3 +1,10 @@
+using Microsoft.Extensions.Logging;
+using ValveResourceFormat.CompiledShader;
+using ValveResourceFormat.Source1.Entities;
+using ValveResourceFormat.Source1.FileSystem;
+using ValveResourceFormat.Source1.Material.Proxies;
+using ValveResourceFormat.Source1.Texture;
+
 namespace ValveResourceFormat.Source1.Material;
 
 /// <summary>
@@ -5,6 +12,8 @@ namespace ValveResourceFormat.Source1.Material;
 /// </summary>
 internal static class Source1MaterialConverter
 {
+    private const float DefaultAlphaTestReference = 0.7f;
+
     private static readonly (string Key, string Parameter)[] TextureMap =
     [
         ("$basetexture", "g_tColor"),
@@ -21,7 +30,284 @@ internal static class Source1MaterialConverter
         ("$iris", "g_tIris"),
         ("$corneatexture", "g_tCornea"),
         ("$ambientoccltexture", "g_tAmbientOccl"),
+        ("$gradienttexture", "g_tGradient"),
+        ("$burndetailtexture", "g_tBurnDetail"),
     ];
+
+    /// <summary>
+    /// Loads a VMT, selecting the high dynamic range or the plain variants of its conditional blocks.
+    /// </summary>
+    /// <param name="path">The path of the material, such as <c>materials/concrete/floor.vmt</c>.</param>
+    /// <param name="fileSystem">The files of the game.</param>
+    /// <param name="highDynamicRange">Whether the <c>hdr</c> condition holds.</param>
+    public static VmtFile LoadVmt(string path, Source1FileSystem fileSystem, bool highDynamicRange)
+        => VmtFile.Load(path, fileSystem.OpenFile, symbol => ResolveHdrCondition(symbol, highDynamicRange));
+
+    /// <summary>
+    /// Converts a VMT of the game to a material resource.
+    /// </summary>
+    /// <param name="path">The path of the material, such as <c>materials/concrete/floor.vmt</c>. It names the material.</param>
+    /// <param name="fileSystem">The files of the game, which the textures are read from for the flags that change the material.</param>
+    /// <param name="highDynamicRange">Whether the material is loaded in high dynamic range, which selects the <c>hdr</c> variants of its
+    /// conditional blocks and the <c>.hdr.vtf</c> variant of its cube map.</param>
+    /// <param name="logger">Receives a warning for a material proxy that does not exist or cannot be set up.</param>
+    /// <returns>The material resource, whose data block is a <see cref="ResourceTypes.Material"/>.</returns>
+    /// <remarks>The proxies of the material are evaluated once, so what they animate keeps its value at time zero.</remarks>
+    public static Resource Convert(string path, Source1FileSystem fileSystem, bool highDynamicRange, ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        var vmt = LoadVmt(path, fileSystem, highDynamicRange);
+        var baseTextureHasAlpha = BaseTextureHasAlpha(fileSystem, vmt);
+        var material = ToVrfMaterial(vmt, path, baseTextureHasAlpha);
+
+        ApplySsbumpDetail(fileSystem, material);
+        Source1MaterialProxyApplier.Apply(material, vmt, texturePath => GetFrameCount(fileSystem, texturePath), logger);
+        ApplyTextureSampling(fileSystem, material);
+        ApplyBlackBaseColor(material);
+
+        if (highDynamicRange && material.TextureParams.TryGetValue("g_tEnvMap", out var envMapPath))
+        {
+            material.TextureParams["g_tEnvMap"] = ToHdrTexturePath(envMapPath);
+        }
+
+        return Finish(material, path);
+    }
+
+    /// <summary>
+    /// Copies a material so that another Source 1 shader draws it, with the same parameters and textures.
+    /// </summary>
+    /// <param name="source">The material to copy.</param>
+    /// <param name="shaderName">The lowercase Source 1 shader name, such as <c>detailsprite</c>.</param>
+    public static Resource WithShader(ResourceTypes.Material source, string shaderName)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        var material = Copy(source, ResourceTypes.Material.Source1ShaderPrefix + shaderName);
+
+        return Finish(material, source.Name);
+    }
+
+    /// <summary>
+    /// Copies a material so that the Source 1 sprite shader draws it with the blending of a render mode of an entity.
+    /// </summary>
+    /// <param name="source">The material to copy.</param>
+    /// <param name="renderMode">The render mode of the sprite.</param>
+    internal static Resource AsSprite(ResourceTypes.Material source, RenderMode renderMode)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        var material = Copy(source, ResourceTypes.Material.Source1ShaderPrefix + "sprite");
+
+        var isAdditive = renderMode is RenderMode.Glow or RenderMode.WorldGlow or RenderMode.TransAdd or RenderMode.TransAddFrameBlend;
+        var isBlended = isAdditive || renderMode is RenderMode.TransColor or RenderMode.TransTexture or RenderMode.TransAlpha or RenderMode.TransAlphaAdd;
+
+        material.IntParams["F_TRANSLUCENT"] = isBlended ? 1 : 0;
+        material.IntParams["F_ADDITIVE_BLEND"] = isAdditive ? 1 : 0;
+        material.IntParams["F_ALPHA_TEST"] = 0;
+
+        // The shader places the quads itself, and checks a glow for being in view instead of depth testing it
+        material.IntParams["F_RENDER_BACKFACES"] = 1;
+        material.IntParams["F_NO_Z_PREPASS"] = 1;
+        material.IntParams["F_DISABLE_Z_BUFFERING"] = renderMode is RenderMode.Glow or RenderMode.WorldGlow ? 1 : 0;
+
+        return Finish(material, source.Name);
+    }
+
+    /// <summary>
+    /// Copies a material so that the Source 1 cable shader draws it, which turns the ribbons of a rope to face the camera.
+    /// </summary>
+    /// <param name="source">The material to copy.</param>
+    internal static Resource AsCable(ResourceTypes.Material source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        var material = Copy(source, ResourceTypes.Material.Source1ShaderPrefix + "cable");
+        material.IntParams["F_RENDER_BACKFACES"] = 1;
+        material.IntParams["F_NO_Z_PREPASS"] = 1;
+
+        return Finish(material, source.Name);
+    }
+
+    /// <summary>
+    /// Copies a material so that it is drawn as an overlay: on top of the surface under it, without writing depth.
+    /// </summary>
+    /// <param name="source">The material to copy.</param>
+    public static Resource AsOverlay(ResourceTypes.Material source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        var material = Copy(source, source.ShaderName);
+        material.IntAttributes["overlay"] = 1;
+
+        return Finish(material, source.Name);
+    }
+
+    private static ResourceTypes.Material Copy(ResourceTypes.Material source, string shaderName)
+    {
+        var material = new ResourceTypes.Material
+        {
+            Resource = new Resource(ResourceType.Material),
+            Name = source.Name,
+            ShaderName = shaderName,
+        };
+
+        foreach (var (name, value) in source.IntParams)
+        {
+            material.IntParams[name] = value;
+        }
+
+        foreach (var (name, value) in source.FloatParams)
+        {
+            material.FloatParams[name] = value;
+        }
+
+        foreach (var (name, value) in source.VectorParams)
+        {
+            material.VectorParams[name] = value;
+        }
+
+        foreach (var (name, value) in source.TextureParams)
+        {
+            material.TextureParams[name] = value;
+        }
+
+        foreach (var (name, value) in source.IntAttributes)
+        {
+            material.IntAttributes[name] = value;
+        }
+
+        return material;
+    }
+
+    /// <summary>
+    /// Creates the material an editor icon is drawn with: the base texture of a material, drawn by the shader of the tools
+    /// sprites, whose vertices the Source 1 sprite shaders do not read.
+    /// </summary>
+    /// <param name="path">The path of the material, such as <c>materials/editor/info_target.vmt</c>.</param>
+    /// <param name="fileSystem">The files of the game.</param>
+    /// <returns>The material resource, or <see langword="null"/> when the material has no base texture.</returns>
+    public static Resource? ConvertToolSprite(string path, Source1FileSystem fileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        var vmt = VmtFile.Load(path, fileSystem.OpenFile);
+        var baseTexture = vmt.Values.String("$basetexture");
+
+        if (string.IsNullOrWhiteSpace(baseTexture))
+        {
+            return null;
+        }
+
+        var hasAlpha = BaseTextureHasAlpha(fileSystem, vmt);
+        var material = new ResourceTypes.Material
+        {
+            Resource = new Resource(ResourceType.Material),
+            Name = path,
+            ShaderName = "tools_sprite.vfx",
+        };
+
+        // The shader reads the alpha of the color texture only when it is set to cut the sprite out
+        material.IntParams["F_ALPHA_TEST"] = hasAlpha ? 1 : 0;
+        SetTexture(material, hasAlpha ? "g_tColorB" : "g_tColorA", baseTexture);
+
+        return Finish(material, path);
+    }
+
+    /// <summary>
+    /// Creates a sky material that draws a cube texture around the camera.
+    /// </summary>
+    /// <param name="path">The path of the material.</param>
+    /// <param name="cubeTexturePath">The path of the cube texture.</param>
+    public static Resource CreateSkyMaterial(string path, string cubeTexturePath)
+    {
+        var material = new ResourceTypes.Material
+        {
+            Resource = new Resource(ResourceType.Material),
+            Name = path,
+            ShaderName = "sky.vfx",
+        };
+
+        material.TextureParams["g_tSkyTexture"] = cubeTexturePath;
+
+        return Finish(material, path);
+    }
+
+    // A texture path that climbs out of its mount is never found by the game, so the material draws without it
+    private static void SetTexture(ResourceTypes.Material material, string parameter, string path)
+    {
+        var texturePath = VmtFile.TryNormalizePath(path, ".vtf");
+
+        if (texturePath != null)
+        {
+            material.TextureParams[parameter] = texturePath;
+        }
+    }
+
+    private static Resource Finish(ResourceTypes.Material material, string path)
+    {
+        var resource = material.Resource;
+        resource.FileName = path;
+        material.BuildData();
+        resource.AddBlock(material);
+
+        return resource;
+    }
+
+    private static int GetFrameCount(Source1FileSystem fileSystem, string texturePath)
+    {
+        if (Source1TextureHeaders.TryRead(fileSystem, texturePath) is not { } header)
+        {
+            return 1;
+        }
+
+        return Math.Max(1, (int)header.Frames);
+    }
+
+    // The sampler state of a texture is a property of the material. The base texture decides it for every texture of the
+    // material that reads the shared coordinates.
+    private static void ApplyTextureSampling(Source1FileSystem fileSystem, ResourceTypes.Material material)
+    {
+        if (!material.TextureParams.TryGetValue("g_tColor", out var path) && !material.TextureParams.TryGetValue("g_tNormal", out path))
+        {
+            return;
+        }
+
+        var texturePath = Source1Paths.RemoveVariant(path, out _);
+
+        if (Source1TextureHeaders.TryRead(fileSystem, texturePath) is not { } header)
+        {
+            return;
+        }
+
+        var flags = header.Flags;
+
+        if ((flags & (VtfFlags.CLAMPS | VtfFlags.BORDER)) != 0)
+        {
+            material.IntParams["g_nTextureAddressModeU"] = (long)RsTextureAddressMode.Clamp;
+        }
+
+        if ((flags & (VtfFlags.CLAMPT | VtfFlags.BORDER)) != 0)
+        {
+            material.IntParams["g_nTextureAddressModeV"] = (long)RsTextureAddressMode.Clamp;
+        }
+
+        if ((flags & VtfFlags.POINTSAMPLE) != 0)
+        {
+            material.IntParams["g_nTextureFilter"] = 1;
+        }
+    }
+
+    // A surface that only reflects has no color of its own
+    private static void ApplyBlackBaseColor(ResourceTypes.Material material)
+    {
+        var reflectsOnly = material.IntParams.GetValueOrDefault("F_ENVMAP") != 0 && material.IntParams.GetValueOrDefault("F_PHONG") == 0;
+
+        if (reflectsOnly && !material.TextureParams.ContainsKey("g_tColor"))
+        {
+            material.TextureParams["g_tColor"] = Source1Paths.BlackTexturePath;
+        }
+    }
 
     /// <summary>
     /// Creates a material resource from a parsed VMT. The Source 1 shader name is kept, lowercase, with the <see cref="ResourceTypes.Material.Source1ShaderPrefix"/>.
@@ -50,7 +336,7 @@ internal static class Source1MaterialConverter
         // The ripples of water come from the normal map, a $bumpmap of water is the du/dv map of older hardware
         if (isWater && values.String("$normalmap") is { } normalMap && !string.IsNullOrWhiteSpace(normalMap))
         {
-            material.TextureParams["g_tNormal"] = VmtFile.NormalizePath(normalMap, ".vtf");
+            SetTexture(material, "g_tNormal", normalMap);
         }
 
         foreach (var (key, parameter) in TextureMap)
@@ -67,7 +353,7 @@ internal static class Source1MaterialConverter
                 continue;
             }
 
-            material.TextureParams[parameter] = VmtFile.NormalizePath(path, ".vtf");
+            SetTexture(material, parameter, path);
         }
 
         var hasBaseTexture = material.TextureParams.ContainsKey("g_tColor");
@@ -77,9 +363,10 @@ internal static class Source1MaterialConverter
         var hasEnvmapMask = material.TextureParams.ContainsKey("g_tEnvMapMask");
         var hasSelfIllumMask = material.TextureParams.ContainsKey("g_tSelfIllumMask");
 
-        // Phong needs a bump map, the base alpha as its mask or a light warp texture
+        // Phong needs a bump map, the base alpha as its mask or a light warp texture. The infected shader takes its mask
+        // from the variation texture.
         var basemapAlphaPhongMask = values.Boolean("$basemapalphaphongmask");
-        var phong = values.Boolean("$phong") && (hasBump || basemapAlphaPhongMask || hasLightWarp);
+        var phong = values.Boolean("$phong") && (hasBump || basemapAlphaPhongMask || hasLightWarp || shader == "infected");
 
         var envmap = values.String("$envmap");
         var hasEnvmap = !string.IsNullOrWhiteSpace(envmap);
@@ -180,7 +467,7 @@ internal static class Source1MaterialConverter
 
         if (hasEnvmap && !envmap!.Equals("env_cubemap", StringComparison.OrdinalIgnoreCase))
         {
-            material.TextureParams["g_tEnvMap"] = VmtFile.NormalizePath(envmap, ".vtf");
+            SetTexture(material, "g_tEnvMap", envmap);
         }
 
         // A surface that uses the alpha of its base texture for something else is not alpha tested
@@ -196,11 +483,15 @@ internal static class Source1MaterialConverter
         SetFlag(material, "F_VERTEX_ALPHA", !isVertexLit && values.Boolean("$vertexalpha"));
         SetFlag(material, "F_SELF_ILLUM", selfIllum);
 
+        // Meshes of models can have flexes, which reach the shader as morphs
+        SetFlag(material, "F_MORPH_SUPPORTED", isVertexLit);
+
         SetFlag(material, "F_BUMPMAP", hasBump);
         SetFlag(material, "F_BUMPMAP2", hasBump && material.TextureParams.ContainsKey("g_tNormal2"));
         SetFlag(material, "F_SSBUMP", hasBump && values.Boolean("$ssbump"));
 
         SetFlag(material, "F_ENVMAP", hasEnvmap);
+        SetFlag(material, "F_ENVMAP_SCENE", hasEnvmap && !material.TextureParams.ContainsKey("g_tEnvMap"));
         SetFlag(material, "F_ENVMAP_MASK", hasEnvmapMask);
         SetFlag(material, "F_BASE_ALPHA_ENVMAP_MASK", baseAlphaEnvmapMask);
         SetFlag(material, "F_NORMALMAP_ALPHA_ENVMAP_MASK", normalMapAlphaEnvmapMask);
@@ -292,6 +583,26 @@ internal static class Source1MaterialConverter
             material.FloatParams["g_flRimLightBoost"] = values.Float("$rimlightboost", 1f);
         }
 
+        if (shader == "infected")
+        {
+            var disableVariation = values.Boolean("$disablevariation") || !material.TextureParams.ContainsKey("g_tGradient");
+
+            SetFlag(material, "F_DISABLE_VARIATION", disableVariation);
+            SetFlag(material, "F_BURNING", !disableVariation && values.Boolean("$burning") && material.TextureParams.ContainsKey("g_tBurnDetail"));
+
+            material.IntParams["g_nSheetIndex"] = values.Integer("$sheetindex", 0);
+            material.FloatParams["g_flSkinTintGradient"] = values.Float("$skintintgradient", 0f);
+            material.FloatParams["g_flColorTintGradient"] = values.Float("$colortintgradient", 0f);
+            material.FloatParams["g_flDefaultPhongExponent"] = values.Float("$defaultphongexponent", 5f);
+            material.FloatParams["g_flSkinPhongExponent"] = values.Float("$skinphongexponent", 5f);
+            material.FloatParams["g_flBloodPhongExponent"] = values.Float("$bloodphongexponent", 5f);
+            material.FloatParams["g_flBurnStrength"] = values.Float("$burnstrength", 0f);
+            material.VectorParams["g_vBloodColor"] = new Vector4(values.Vector("$bloodcolor", new Vector3(1f, 0f, 0f)), 0f);
+
+            var bloodMaskRange = values.Vector("$bloodmaskrange", new Vector3(0f, 1f, 0f));
+            material.VectorParams["g_vBloodMaskRange"] = new Vector4(bloodMaskRange.X, bloodMaskRange.Y, 0f, 0f);
+        }
+
         if (shader == "eyerefract")
         {
             SetFlag(material, "F_RAYTRACE_SPHERE", values.Boolean("$raytracesphere", true));
@@ -320,9 +631,15 @@ internal static class Source1MaterialConverter
             SetFlag(material, "F_FADE_OUT_ON_SILHOUETTE", values.Boolean("$fadeoutonsilhouette"));
         }
 
-        // Without a positive reference the alpha test keeps every pixel, otherwise the reference is quantized to 8 bits
+        // Without a positive reference the alpha test uses the default of the render state, then the reference is quantized to 8 bits
         var alphaTestReference = values.Float("$alphatestreference", 0f);
-        material.FloatParams["g_flAlphaTestReference"] = alphaTestReference > 0f ? MathF.Floor(alphaTestReference * 255f) / 255f : 0f;
+
+        if (alphaTestReference <= 0f)
+        {
+            alphaTestReference = DefaultAlphaTestReference;
+        }
+
+        material.FloatParams["g_flAlphaTestReference"] = MathF.Floor(alphaTestReference * 255f) / 255f;
         var opacity = values.Float("$alpha", 1f);
         material.FloatParams["g_flOpacityScale"] = ConvertOpacity(opacity, shader);
 
@@ -453,6 +770,72 @@ internal static class Source1MaterialConverter
         }
 
         return MathF.Pow(MathF.Floor(channel * 255f) / 255f, 2.2f);
+    }
+
+    private static bool? ResolveHdrCondition(string symbol, bool highDynamicRange)
+    {
+        if (symbol.Equals("hdr", StringComparison.OrdinalIgnoreCase))
+        {
+            return highDynamicRange;
+        }
+
+        return null;
+    }
+
+    // The provider falls back to the plain cube map when a high dynamic range one does not exist
+    private static string ToHdrTexturePath(string path)
+    {
+        const string TextureExtension = ".vtf";
+        const string HdrTextureExtension = ".hdr.vtf";
+
+        if (!path.EndsWith(TextureExtension, StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(HdrTextureExtension, StringComparison.OrdinalIgnoreCase))
+        {
+            return path;
+        }
+
+        return string.Concat(path.AsSpan(0, path.Length - TextureExtension.Length), HdrTextureExtension);
+    }
+
+    // A detail texture of a lightmapped surface that is flagged as a self shadowed bump map holds lightmap weights
+    // when the surface has a bump map and a brightness otherwise, whatever blend mode the material asks for
+    private static void ApplySsbumpDetail(Source1FileSystem fileSystem, ResourceTypes.Material material)
+    {
+        const int DetailBlendBumpWeights = 10;
+        const int DetailBlendBrightness = 11;
+
+        var shaderName = material.ShaderName;
+
+        if (shaderName != ResourceTypes.Material.Source1ShaderPrefix + "lightmappedgeneric"
+            && shaderName != ResourceTypes.Material.Source1ShaderPrefix + "worldvertextransition"
+            && shaderName != ResourceTypes.Material.Source1ShaderPrefix + "lightmappedtwotexture"
+            && shaderName != ResourceTypes.Material.Source1ShaderPrefix + "lightmappedreflective")
+        {
+            return;
+        }
+
+        if (!material.TextureParams.TryGetValue("g_tDetail", out var detailPath))
+        {
+            return;
+        }
+
+        if (Source1TextureHeaders.TryRead(fileSystem, detailPath) is not { } header || (header.Flags & VtfFlags.SSBUMP) == 0)
+        {
+            return;
+        }
+
+        var hasBump = material.TextureParams.ContainsKey("g_tNormal");
+        material.IntParams["g_nDetailBlendMode"] = hasBump ? DetailBlendBumpWeights : DetailBlendBrightness;
+    }
+
+    internal static bool BaseTextureHasAlpha(Source1FileSystem fileSystem, VmtFile vmt)
+    {
+        if (Source1TextureHeaders.TryReadBaseTexture(fileSystem, vmt) is not { } header)
+        {
+            return true;
+        }
+
+        return (header.Flags & (VtfFlags.ONEBITALPHA | VtfFlags.EIGHTBITALPHA)) != 0;
     }
 
     private static void SetTransform(ResourceTypes.Material material, VmtParameters values, string key, string row0Name, string row1Name)

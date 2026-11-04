@@ -14,18 +14,18 @@ in vec2 vLightmapUVOut;
 in vec4 vVertexColorOut;
 in float vBlendOut;
 
-uniform sampler2D g_tColor; // SrgbRead(true) RepresentativeTexture
-uniform sampler2D g_tColor2; // SrgbRead(true)
-uniform sampler2D g_tDetail;
-uniform sampler2D g_tSelfIllumMask;
-uniform sampler2D g_tBlendModulate;
-uniform sampler2D g_tNormal;
-uniform sampler2D g_tNormal2;
-uniform sampler2D g_tLightWarp;
-uniform sampler2D g_tLightmap;
-uniform sampler2D g_tLightmap1;
-uniform sampler2D g_tLightmap2;
-uniform sampler2D g_tLightmap3;
+uniform sampler2D g_tColor; // SrgbRead(true) Sampler(UserConfig) RepresentativeTexture Default(White)
+uniform sampler2D g_tColor2; // SrgbRead(true) Sampler(UserConfig) Default(White)
+uniform sampler2D g_tDetail; // Sampler(UserConfig) Default(White)
+uniform sampler2D g_tSelfIllumMask; // Sampler(UserConfig) Default(White)
+uniform sampler2D g_tBlendModulate; // Sampler(UserConfig) Default(White)
+uniform sampler2D g_tNormal; // Sampler(UserConfig)
+uniform sampler2D g_tNormal2; // Sampler(UserConfig)
+uniform sampler2D g_tLightWarp; // Sampler(Clamp) Default(White)
+uniform sampler2D g_tLightmap; // Default(White)
+uniform sampler2D g_tLightmapBump1; // Default(White)
+uniform sampler2D g_tLightmapBump2; // Default(White)
+uniform sampler2D g_tLightmapBump3; // Default(White)
 
 uniform int F_BLEND_MODULATE;
 uniform int F_BUMPMAP;
@@ -61,9 +61,9 @@ vec4 SampleSource1BaseTexture(vec2 texCoord)
 // tangent space, or for a self shadowed bump map the weights of the three lightmaps.
 vec3 GetSource1BumpedLightmap(vec2 lightmapCoord, vec3 tangentNormal, vec4 detailColor)
 {
-    vec3 light1 = texture(g_tLightmap1, lightmapCoord).rgb;
-    vec3 light2 = texture(g_tLightmap2, lightmapCoord).rgb;
-    vec3 light3 = texture(g_tLightmap3, lightmapCoord).rgb;
+    vec3 light1 = texture(g_tLightmapBump1, lightmapCoord).rgb;
+    vec3 light2 = texture(g_tLightmapBump2, lightmapCoord).rgb;
+    vec3 light3 = texture(g_tLightmapBump3, lightmapCoord).rgb;
 
     if (F_SSBUMP != 0)
     {

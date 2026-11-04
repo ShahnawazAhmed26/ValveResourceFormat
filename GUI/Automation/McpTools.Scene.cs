@@ -54,7 +54,7 @@ internal sealed partial class McpTools
         }
     }
 
-    private readonly ConditionalWeakTable<GLSceneViewer, EntityTable> EntityTables = [];
+    private readonly ConditionalWeakTable<GLWorldViewer, EntityTable> EntityTables = [];
 
     // A scene numbers its nodes by their place in its lists, which shifts as nodes come and go
     private readonly IdRegistry<SceneNode> NodeIds = new();
@@ -67,27 +67,21 @@ internal sealed partial class McpTools
     /// Every entity of the map and of the spawn groups it loaded, such as its 3D sky, indexed by id.
     /// The map's come first, so their ids are their index in it. Call between frames.
     /// </summary>
-    private EntityTable Entities(GLSceneViewer viewer)
+    private EntityTable Entities(GLWorldViewer viewer)
     {
-        var mapEntities = (viewer as IEntityMapViewer)?.MapEntities;
-
-        if (mapEntities == null)
-        {
-            throw new ToolException("This tab shows geometry without a map, so it has no entities.");
-        }
-
+        var world = viewer.LoadedWorld ?? throw new ToolException("This tab shows world geometry without a map, so it has no entities.");
         var table = EntityTables.GetOrCreateValue(viewer);
 
         // Playing or stopping the world parses its lumps again. The new entities come in the same order, so they take the old ids.
-        if (mapEntities.Count > 0 && !table.Ids.ContainsKey(mapEntities[0]))
+        if (world.Entities.Count > 0 && !table.Ids.ContainsKey(world.Entities[0]))
         {
             table.Entities.Clear();
             table.Ids.Clear();
         }
 
-        table.Add(mapEntities, null);
+        table.Add(world.Entities, null);
 
-        foreach (var group in ((IEntityMapViewer)viewer).OwnSceneSpawnGroups.ToArray())
+        foreach (var group in viewer.OwnSceneSpawnGroups.ToArray())
         {
             table.Add(group.Entities, group);
         }
@@ -98,9 +92,9 @@ internal sealed partial class McpTools
     /// <summary>The entities of a map tab, or null for a tab without a map. Call between frames.</summary>
     private EntityTable? MapEntities(GLSceneViewer viewer)
     {
-        if (viewer is IEntityMapViewer { MapEntities: not null })
+        if (viewer is GLWorldViewer { LoadedWorld: not null } world)
         {
-            return Entities(viewer);
+            return Entities(world);
         }
 
         return null;
@@ -196,7 +190,7 @@ internal sealed partial class McpTools
 
     [Tool("Search the entities of a map, its 3D sky and the other spawn groups it loaded. There is no free text search or 'query': 'classname', 'targetname', 'key' and 'value' are separate filters, and an entity must match all that are given. Text filters are case insensitive regular expressions, not wildcards, so use 'decal' or '.*decal.*' rather than '*decal*'. They match anywhere unless anchored with ^ and $. Positions are where each entity renders. Returns 'next_offset' when more entities match.")]
     private async Task<object> FindEntities(
-        GLSceneViewer viewer,
+        GLWorldViewer viewer,
         [Description("Classname to match.")] string? classname = null,
         [Description("Targetname to match.")] string? targetname = null,
         [Description("Only entities with this exact key.")] string? key = null,
@@ -264,7 +258,7 @@ internal sealed partial class McpTools
     }
 
     /// <summary>Every entity of a map with where it renders, and the entity it spawned as. Call between frames.</summary>
-    private List<EntityRow> EntityRows(GLSceneViewer viewer)
+    private List<EntityRow> EntityRows(GLWorldViewer viewer)
     {
         var spawned = new Dictionary<EntityLump.Entity, BaseEntity>(ReferenceEqualityComparer.Instance);
 
@@ -313,7 +307,7 @@ internal sealed partial class McpTools
         => instance?.IsTrigger == true || data.GetStringProperty("classname")?.StartsWith("trigger_", StringComparison.OrdinalIgnoreCase) == true;
 
     [Tool("Describe one entity: its keyvalues and outputs, where it renders, spawn group, the class it spawned as with its live transform, and its scene nodes.")]
-    private object GetEntity(GLSceneViewer viewer, [Description("Entity id from find_entities or pick.")] int id)
+    private object GetEntity(GLWorldViewer viewer, [Description("Entity id from find_entities or pick.")] int id)
     {
         var entities = Entities(viewer);
         var data = EntityById(entities, id).Data;

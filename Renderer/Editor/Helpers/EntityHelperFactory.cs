@@ -1,7 +1,6 @@
 using Microsoft.Extensions.Logging;
 using ValveResourceFormat.IO.Fgd;
 using ValveResourceFormat.Renderer.Editor.Entities;
-using ValveResourceFormat.Renderer.Source1;
 
 namespace ValveResourceFormat.Renderer.Editor.Helpers;
 
@@ -20,7 +19,6 @@ public static class EntityHelperFactory
 
     // A helper without a creator is one the editor has that draws nothing here
     private static readonly Dictionary<string, Creator?> Creators = CreateCreators();
-    private static readonly Dictionary<string, Creator?> Source1Creators = CreateSource1Creators();
     private static readonly HashSet<string> UnknownNames = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Creates the helper a declaration names.</summary>
@@ -34,10 +32,7 @@ public static class EntityHelperFactory
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(declaration);
 
-        // The icons and models of a Source 1 game are materials and models of that game
-        var creators = owner.Scene.RendererContext.Source1FileSystem != null ? Source1Creators : Creators;
-
-        if (!creators.TryGetValue(declaration.Name, out var create))
+        if (!Creators.TryGetValue(declaration.Name, out var create))
         {
             if (RememberUnknownName(declaration.Name))
             {
@@ -123,27 +118,6 @@ public static class EntityHelperFactory
         }
     }
 
-    // The helpers of a Source 1 game, which its FGD files declare with the names the editor knows them by
-    private static Dictionary<string, Creator?> CreateSource1Creators()
-    {
-        var creators = CreateCreators();
-
-        creators["iconsprite"] = Source1IconHelper.CreateSource1;
-
-        foreach (var name in (string[])["model", "editormodel", "studio", "studioprop", "lightprop"])
-        {
-            creators[name] = Source1ModelHelper.Create;
-        }
-
-        // Helpers that have nothing to draw here, or that only draw things of Source 2 games
-        foreach (var name in (string[])["sidelist", "animator", "sprite", "keyframe", "decal", "quadbounds", "overlay", "overlay_transition", "mapsize", "instance", "cylinder"])
-        {
-            creators[name] = null;
-        }
-
-        return creators;
-    }
-
     private static Dictionary<string, Creator?> CreateCreators()
     {
         var creators = new Dictionary<string, Creator?>(StringComparer.OrdinalIgnoreCase);
@@ -163,7 +137,7 @@ public static class EntityHelperFactory
         Add(static (owner, declaration) => new VolumetricFogControllerHelper(owner, declaration), "volumetric_fog_controller");
 
         Add(null, "dotaskybox");
-        Add(ModelHelper.Create, "editormodel", "studio", "studioprop");
+        Add(ModelHelper.Create, "editormodel", "studio", "studioprop", "lightprop");
         Add(static (owner, declaration) => new LightHelper(owner, declaration), "light");
         Add(static (owner, declaration) => new BarnLightHelper(owner, declaration), "barnlight");
         Add(static (owner, declaration) => new RectLightHelper(owner, declaration), "rectlight");

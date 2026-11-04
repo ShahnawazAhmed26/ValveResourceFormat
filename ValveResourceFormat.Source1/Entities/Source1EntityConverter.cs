@@ -5,6 +5,22 @@ using ValveResourceFormat.Source1.Bsp;
 
 namespace ValveResourceFormat.Source1.Entities;
 
+/// <summary>The <c>rendermode</c> of a Source 1 entity.</summary>
+internal enum RenderMode
+{
+    Normal = 0,
+    TransColor = 1,
+    TransTexture = 2,
+    Glow = 3,
+    TransAlpha = 4,
+    TransAdd = 5,
+    Environmental = 6,
+    TransAddFrameBlend = 7,
+    TransAlphaAdd = 8,
+    WorldGlow = 9,
+    None = 10,
+}
+
 /// <summary>
 /// Converts the entities of a Source 1 map to the entities of a compiled Source 2 map, which is what the
 /// entity system of the renderer and the entity views of the viewer read.
@@ -176,7 +192,6 @@ internal static class Source1EntityConverter
         }
 
         ConvertModel(source, entity);
-        ConvertCubemap(source, entity);
 
         if (Source1LightConverter.IsLightClass(sourceClassName.ToLowerInvariant()))
         {
@@ -208,40 +223,43 @@ internal static class Source1EntityConverter
         return remapped;
     }
 
-    // Brush entities name the model of the map they are a part of, as *N
-    private static void ConvertModel(BspEntity source, EntityLump.Entity entity)
+    /// <summary>Gets whether an entity does not draw its model when the map starts, by its render mode, effects, or because it starts disabled.</summary>
+    /// <param name="entity">The entity.</param>
+    internal static bool IsHiddenAtSpawn(BspEntity entity)
     {
-        var model = source.GetString("model");
+        const int NoDrawEffect = 32;
+        const int WallToggleStartOff = 1;
 
-        if (model.Length > 1 && model[0] == '*' && int.TryParse(model.AsSpan(1), NumberStyles.Integer, CultureInfo.InvariantCulture, out var index))
+        ArgumentNullException.ThrowIfNull(entity);
+
+        var renderMode = (RenderMode)entity.GetInt("rendermode");
+
+        if (renderMode is RenderMode.Environmental or RenderMode.None || (entity.GetInt("effects") & NoDrawEffect) != 0)
         {
-            entity["source1_brush_model"] = (long)index;
+            return true;
         }
 
+        // Triggers never draw, whatever material their brushes use
+        if (entity.ClassName.StartsWith("trigger_", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (entity.ClassName == "func_wall_toggle")
+        {
+            return (entity.GetInt("spawnflags") & WallToggleStartOff) != 0;
+        }
+
+        return entity.GetInt("startdisabled") != 0;
+    }
+
+    private static void ConvertModel(BspEntity source, EntityLump.Entity entity)
+    {
         var modelScale = source.GetFloat("modelscale", 1f);
 
         if (modelScale != 1f && modelScale > 0f)
         {
             entity["scales"] = string.Create(CultureInfo.InvariantCulture, $"{modelScale} {modelScale} {modelScale}");
-        }
-    }
-
-    // Source 1 cubemaps are the textures the map is compiled with, named after where the cubemap was taken
-    private static void ConvertCubemap(BspEntity source, EntityLump.Entity entity)
-    {
-        if (!source.ClassName.Equals("env_cubemap", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        var origin = source.Origin;
-        var name = string.Create(CultureInfo.InvariantCulture, $"c{(int)origin.X}_{(int)origin.Y}_{(int)origin.Z}");
-
-        entity["source1_cubemap"] = name;
-
-        if (!entity.ContainsKey("influenceradius"))
-        {
-            entity["influenceradius"] = 512L;
         }
     }
 

@@ -107,72 +107,6 @@ internal sealed partial class Source1Model
         animations = [.. loadedAnimations];
     }
 
-    /// <summary>Finds a sequence by name, ignoring case.</summary>
-    /// <returns>The sequence, or null when the model has none with that name.</returns>
-    public Source1Sequence? FindSequence(string name)
-    {
-        foreach (var sequence in Sequences)
-        {
-            if (sequence.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
-            {
-                return sequence;
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>Finds the index of a pose parameter by name, ignoring case.</summary>
-    /// <returns>Index into <see cref="PoseParameters"/>, or -1 when there is none with that name.</returns>
-    public int FindPoseParameter(string name)
-    {
-        for (var i = 0; i < PoseParameters.Length; i++)
-        {
-            if (PoseParameters[i].Name.Equals(name, StringComparison.OrdinalIgnoreCase))
-            {
-                return i;
-            }
-        }
-
-        return -1;
-    }
-
-    /// <summary>
-    /// Creates pose parameter values for the animation evaluation functions, one per entry of <see cref="PoseParameters"/>.
-    /// Every value is zero, moved into the range of its parameter.
-    /// </summary>
-    public float[] CreateDefaultPoseParameters()
-    {
-        var values = new float[PoseParameters.Length];
-
-        for (var i = 0; i < values.Length; i++)
-        {
-            var parameter = PoseParameters[i];
-            var low = MathF.Min(parameter.Start, parameter.End);
-            var high = MathF.Max(parameter.Start, parameter.End);
-            values[i] = Math.Clamp(0f, low, high);
-        }
-
-        return values;
-    }
-
-    /// <summary>Fills local transforms with the reference pose of the bones.</summary>
-    /// <param name="positions">Receives local positions, at least <see cref="Bones"/> long.</param>
-    /// <param name="rotations">Receives local rotations, at least <see cref="Bones"/> long.</param>
-    public void GetReferencePose(Span<Vector3> positions, Span<Quaternion> rotations)
-    {
-        if (positions.Length < Bones.Length || rotations.Length < Bones.Length)
-        {
-            throw new ArgumentException("Output spans are shorter than the bone count.");
-        }
-
-        for (var i = 0; i < Bones.Length; i++)
-        {
-            positions[i] = Bones[i].Position;
-            rotations[i] = Bones[i].Rotation;
-        }
-    }
-
     /// <summary>
     /// Builds model-space transforms of the bones from bone-local transforms, then evaluates the procedural bones
     /// in bone order. Parents precede their children.
@@ -196,24 +130,6 @@ internal sealed partial class Source1Model
             boneToModel[i] = (uint)parent < (uint)i ? local * boneToModel[parent] : local;
 
             Bones[i].Procedural?.Evaluate(this, i, boneToModel);
-        }
-    }
-
-    /// <summary>
-    /// Sequences that play on every pose, in model order. The engine adds them under the active sequence,
-    /// driven by real time.
-    /// </summary>
-    public IEnumerable<Source1Sequence> AutoplaySequences
-    {
-        get
-        {
-            foreach (var sequence in Sequences)
-            {
-                if ((sequence.Flags & Source1AnimationFlags.AutoPlay) != 0)
-                {
-                    yield return sequence;
-                }
-            }
         }
     }
 

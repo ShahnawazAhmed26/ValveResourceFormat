@@ -7,9 +7,9 @@
 in vec3 vFragPosition;
 in vec2 vTexCoordOut;
 
-uniform sampler2D g_tIris; // SrgbRead(true) RepresentativeTexture
-uniform sampler2D g_tCornea;
-uniform sampler2D g_tAmbientOccl;
+uniform sampler2D g_tIris; // SrgbRead(true) RepresentativeTexture Default(White)
+uniform sampler2D g_tCornea; // Default(White)
+uniform sampler2D g_tAmbientOccl; // Default(White)
 
 uniform int F_RAYTRACE_SPHERE;
 uniform int F_SPHERE_TEXKILL;
@@ -158,7 +158,7 @@ void main()
     vec3 ambientOcclusion = texture(g_tAmbientOccl, vTexCoordOut).rgb;
     vertexLight *= mix(g_vAmbientOcclColor, vec3(1.0), ambientOcclusion);
 
-    vec3 reflection = g_flGlossiness * texture(g_tEnvMap, corneaReflection).rgb;
+    vec3 reflection = g_flGlossiness * SampleSource1Cube(corneaReflection);
 
     vec3 color = irisColor + corneaNoise * 0.1;
     color *= vertexLight + irisLighting;

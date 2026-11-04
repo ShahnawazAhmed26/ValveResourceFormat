@@ -732,6 +732,8 @@ namespace CLI
                 }
             }
 
+            DisposeSource1TestGames();
+
             if (OutputFile != null && !OutputToConsole)
             {
                 Console.WriteLine($"--- Wrote {WrittenFiles} files");
@@ -831,7 +833,7 @@ namespace CLI
                         return false;
                     }
 
-                    return SupportedFileNamesRegex().IsMatch(Path.GetFileName(s));
+                    return IsSupportedFileName(Path.GetFileName(s));
                 })
                 .Where(s => FileFilter.Length == 0 || !IsExcludedVpkFilePath(FixPathSlashes(Path.GetRelativePath(path, s))))
                 .ToList();
@@ -1057,9 +1059,23 @@ namespace CLI
                 return;
             }
 
-            const uint Source1Vcs = 0x06;
-            if (CollectStats && pathExtension == ".vcs" && magic == Source1Vcs)
+            if (CollectStats && stream.Length == 0)
             {
+                AddNonResourceStat("Empty file", path, originalPath);
+                return;
+            }
+
+            if (CollectStats && TryTestSource1File(path, stream, magic, originalPath, package))
+            {
+                return;
+            }
+
+            // Source 1 shaders start with their version
+            const uint Source1VcsMinVersion = 2;
+            const uint Source1VcsMaxVersion = 6;
+            if (CollectStats && pathExtension == ".vcs" && magic is >= Source1VcsMinVersion and <= Source1VcsMaxVersion)
+            {
+                AddNonResourceStat($"Source 1 shader version {magic}", path, originalPath);
                 return;
             }
 
@@ -1578,9 +1594,9 @@ namespace CLI
                 orderedEntries = orderedEntries
                     .Select(x => Package.PathComparer.Equals(x.Key, "vpk")
                         ? KeyValuePair.Create(x.Key, RecursiveSearchArchives ? x.Value : [])
-                        : SupportedFileNamesRegex().IsMatch($".{x.Key}")
+                        : IsSupportedFileName($".{x.Key}")
                             ? x
-                            : KeyValuePair.Create(x.Key, x.Value.Where(entry => SupportedFileNamesRegex().IsMatch(entry.GetFileName())).ToList()))
+                            : KeyValuePair.Create(x.Key, x.Value.Where(entry => IsSupportedFileName(entry.GetFileName())).ToList()))
                     .Where(x => x.Value.Count > 0)
                     .ToList();
             }

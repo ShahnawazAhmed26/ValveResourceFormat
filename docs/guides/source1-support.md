@@ -2,6 +2,8 @@
 
 Source 1 and GoldSrc games open in the GUI viewer. They are not supported by the CLI and the library is not published.
 
+Source 1 maps, models, materials and textures are converted to Source 2 resources in memory and drawn by the Source 2 renderer. The converted resources are not written out as compiled files.
+
 ## Supported
 
 ### Source 1
@@ -20,18 +22,17 @@ Source 1 and GoldSrc games open in the GUI viewer. They are not supported by the
   - texture, model and pakfile names in UTF-8 or Latin-1
   - pakfile entries (stored, deflate, LZMA)
   - displacements
-  - static props v4 to v11, including 72-byte v7 and v10 entries
+  - static props v4 to v11, including 72-byte v7 and v10 entries, and fade distances
   - overlays, water overlays and overlay fades
   - per-face cubemap materials
   - light entities with styles, attenuation, cones and HDR keys
 - MDL v44 to v49 with VVD, VTX (both strip group layouts, detected per file), PHY and ANI:
   - include models
   - skins and bodygroups
-  - flexes and wrinkle maps
-  - eyes
-  - sequences and animation blending
+  - sequences, blends and pose parameters
   - procedural bones (axis interp, quat interp, aim at bone and attachment)
   - local hierarchy
+  - flexes, flex controllers and flex rules, stereo flexes and eyelids, set with the flex controller sliders
 - VTF 7.0 to 7.5:
   - all mips, faces and frames
   - sphere maps
@@ -40,7 +41,7 @@ Source 1 and GoldSrc games open in the GUI viewer. They are not supported by the
   - patch, `#base` and `#include`
   - fallback blocks
   - key and bracket conditions
-  - time-driven proxies: math, sine, ramp, noise, texture scroll and transform, animated texture
+  - proxies, evaluated once at load: math, sine, ramp, noise, texture scroll and transform, animated texture
 - Shaders:
   - LightmappedGeneric and WorldVertexTransition: per-texture transforms, `$seamless_scale`, detail blend modes, bump and ssbump lighting, blend modulate
   - VertexLitGeneric with phong, blend tint, selfillum and envmap
@@ -48,6 +49,7 @@ Source 1 and GoldSrc games open in the GUI viewer. They are not supported by the
   - Water (cheap path)
   - Refract
   - Eyes and teeth
+  - Infected
   - Sprite
   - Cable
   - DecalModulate
@@ -82,26 +84,31 @@ Source 1 and GoldSrc games open in the GUI viewer. They are not supported by the
   - face lump v2
 - Static props:
   - v12 and v13
+  - screen-size fades
   - Black Mesa per-vertex lighting with 12-byte vertices (`sp_hdr_N.vhv`) and `sp_rgbe_N.vhv`
 - Models:
   - MDL before v44 and v50 to v53, and the v44 variant with extra header fields
   - VTX other than v7
   - VVC
   - `.phz` physics files
-  - lower LODs
-  - bone flex drivers
+  - wrinkle maps, bone flex drivers and flex animation in sequences
+  - eyelids following where the eyes look (they stay as for eyes that look straight ahead)
+  - eyeball shading
+  - local sequence layers over a blend sequence (they are laid over the blend instead of composed into it, which differs while the sequence cross fades)
+  - animation event sounds
   - the illumination position attachment
   - IK chains, rules and locks
   - jiggle bone simulation
   - zero-frame animation data
   - bone controllers
-  - flex controller UI
+  - flex controller UI groups (the controllers of stereo and n-way sliders show one by one)
 - VTF:
   - 7.6
   - console formats (Xbox 360 and PS3 textures)
   - volume textures (first slice only)
 - Materials:
-  - entity-driven proxies (left at the VMT value)
+  - animated proxies (scrolling, pulsing and animated textures stay at their first frame)
+  - entity-driven proxies (left at a neutral value)
   - water reflection and refraction, flow maps, `$scroll1`/`$scroll2`, `$bottommaterial`
   - `$seamless_base` and `$seamless_detail`
   - uncompressed HDR sky textures
@@ -114,7 +121,6 @@ Source 1 and GoldSrc games open in the GUI viewer. They are not supported by the
   - Modulate
   - SolidEnergy
   - Portal shaders
-  - Infected
   - WindowImposter
   - screenspace_general
   - Wireframe

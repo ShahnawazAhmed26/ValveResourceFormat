@@ -122,7 +122,7 @@ in the Dump column.
 | VBKV / binary KeyValues1           | Text dump                                                                                                                                                                                                     |
 | Binary KeyValues3 (all versions)   | Text dump; backbone of the generic fallback above; writing supported                                                                                                                                          |
 | KeyValues3 text                    | Highlighted text view; Animgraph 1 graph documents also open in the graph viewer                                                                                                                              |
-| Binary resource writing            | Basic re-serialization of resources back to the compiled binary format (`Resource.Serialize`), for a subset of block types (binary KV3, plaintext, Panorama, external reference lists, and raw binary blocks) |
+| Binary resource writing            | Basic re-serialization of resources back to the compiled binary format (`Resource.Serialize`), for a subset of block types (binary KV3, plaintext, Panorama, external reference lists, vertex and index buffers, and raw binary blocks), and creating textures and models with embedded meshes in memory |
 
 ## Models (vmdl)
 

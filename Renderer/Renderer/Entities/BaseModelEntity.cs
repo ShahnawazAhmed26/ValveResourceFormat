@@ -238,7 +238,7 @@ public abstract class BaseModelEntity : BaseEntity
         {
             foreach (var (name, value) in bodyGroups)
             {
-                SetBodyGroup(node, name, ReadBodyGroupChoice(value));
+                node.SetBodyGroup(name, ReadBodyGroupChoice(value));
             }
         }
 
@@ -349,28 +349,17 @@ public abstract class BaseModelEntity : BaseEntity
 
         foreach (var (name, choice) in appearance.BodyGroups)
         {
-            SetBodyGroup(node, name, choice);
+            node.SetBodyGroup(name, choice);
         }
     }
 
-    private static int ReadBodyGroupChoice(KVObject value) => value.ValueType switch
+    // The number of the choice drawn of a body group, which a key writes as a number or as text
+    internal static int ReadBodyGroupChoice(KVObject value) => value.ValueType switch
     {
         KVValueType.String => int.TryParse((string)value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0,
         KVValueType.Collection or KVValueType.Array or KVValueType.Null => 0,
         _ => value.ToInt32(CultureInfo.InvariantCulture),
     };
-
-    private static void SetBodyGroup(ModelSceneNode node, string bodyGroup, int index)
-    {
-        foreach (var choice in node.GetBodyGroupChoices())
-        {
-            if (choice.Index == index && choice.BodyGroup.Equals(bodyGroup, StringComparison.OrdinalIgnoreCase))
-            {
-                node.SetBodyGroupChoice(choice);
-                return;
-            }
-        }
-    }
 
     /// <summary>
     /// Gets whether the model's physics becomes a <see cref="BaseEntity.Collider"/>; its hulls are drawn

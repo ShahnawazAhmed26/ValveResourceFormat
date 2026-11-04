@@ -9,6 +9,7 @@ using GUI.Controls;
 using GUI.Types.Audio;
 using GUI.Utils;
 using OpenTK.Graphics.OpenGL;
+using ValveResourceFormat.IO.Fgd;
 using ValveResourceFormat.Renderer;
 using ValveResourceFormat.Renderer.Audio;
 using ValveResourceFormat.Renderer.Editor;
@@ -126,13 +127,15 @@ namespace GUI.Types.GLViewers
             Renderer.LockedCullFrustum = cullFrustum;
         }
 
-        protected GLSceneViewer(VrfGuiContext vrfGuiContext, RendererContext rendererContext) : base(rendererContext)
+        protected GLSceneViewer(VrfGuiContext vrfGuiContext, RendererContext rendererContext, EntityClassTable? entityClasses = null) : base(rendererContext)
         {
             GuiContext = vrfGuiContext;
 
             Renderer = new(rendererContext);
             Input = new UserInput(Renderer);
-            EntityVisuals = new HammerEntityVisuals(rendererContext);
+            EntityVisuals = entityClasses != null
+                ? new HammerEntityVisuals(entityClasses)
+                : new HammerEntityVisuals(rendererContext.FileLoader, rendererContext.Logger);
             Renderer.EntitySystem.ToolVisuals = EntityVisuals;
             Renderer.Settings.DrawFilter = Tools;
             TextRenderer = new(rendererContext, Renderer.Camera);

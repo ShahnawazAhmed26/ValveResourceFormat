@@ -106,6 +106,12 @@ namespace ValveResourceFormat.Renderer.Shaders
             /// <summary>Gets the set of sampler uniform names annotated with <c>// Sampler(UserConfig)</c>.</summary>
             public HashSet<string> SamplerUserConfigUniforms { get; } = [];
 
+            /// <summary>Gets the set of sampler uniform names annotated with <c>// Sampler(Clamp)</c>.</summary>
+            public HashSet<string> SamplerClampUniforms { get; } = [];
+
+            /// <summary>Gets the default texture of each sampler uniform annotated with <c>// Default(White)</c> or <c>// Default(Cube)</c>.</summary>
+            public Dictionary<string, string> DefaultTextures { get; } = [];
+
             /// <summary>Gets or sets the sampler uniform annotated with <c>// RepresentativeTexture</c>.</summary>
             public string? RepresentativeTexture { get; set; }
 
@@ -321,6 +327,8 @@ namespace ValveResourceFormat.Renderer.Shaders
                     UniformNames = parsedData.Uniforms,
                     SrgbUniforms = parsedData.SrgbUniforms,
                     SamplerUserConfigUniforms = parsedData.SamplerUserConfigUniforms,
+                    SamplerClampUniforms = parsedData.SamplerClampUniforms,
+                    DefaultTextures = parsedData.DefaultTextures,
                     RepresentativeTexture = parsedData.RepresentativeTexture,
 
                     // Copied, because the parsed data is shared by every variant of this shader while the

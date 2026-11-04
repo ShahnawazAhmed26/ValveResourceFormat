@@ -58,6 +58,12 @@ namespace ValveResourceFormat.Renderer.Shaders
         /// <summary>Gets the set of sampler uniform names that use material address modes via <c>// Sampler(UserConfig)</c>.</summary>
         public required HashSet<string> SamplerUserConfigUniforms { get; init; }
 
+        /// <summary>Gets the set of sampler uniform names that always clamp, annotated with <c>// Sampler(Clamp)</c>.</summary>
+        public required HashSet<string> SamplerClampUniforms { get; init; }
+
+        /// <summary>Gets the default texture a sampler reads when the material sets none, annotated with <c>// Default(White)</c> or <c>// Default(Cube)</c>.</summary>
+        public required Dictionary<string, string> DefaultTextures { get; init; }
+
         /// <summary>Gets the sampler uniform that holds the color of a material, annotated with <c>// RepresentativeTexture</c>, or <see langword="null"/> when the shader has none.</summary>
         public string? RepresentativeTexture { get; init; }
 
@@ -448,6 +454,8 @@ namespace ValveResourceFormat.Renderer.Shaders
 
                     Default.Textures[name] = type switch
                     {
+                        _ when DefaultTextures.GetValueOrDefault(name) == "White" => MaterialLoader.GetDefaultColor(),
+                        _ when DefaultTextures.GetValueOrDefault(name) == "Cube" => MaterialLoader.GetDefaultCube(),
                         ActiveUniformType.Sampler1DArray or ActiveUniformType.Sampler2DArray => MaterialLoader.GetDefaultTextureArray(),
                         ActiveUniformType.Sampler3D => MaterialLoader.GetDefaultVolume(),
                         _ when name.Contains("color", StringComparison.OrdinalIgnoreCase) => MaterialLoader.GetErrorTexture(),

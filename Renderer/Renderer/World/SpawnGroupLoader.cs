@@ -55,7 +55,8 @@ internal sealed class SpawnGroupLoader
             // The placing map stores prefab lights once its lump is done
             if (world.OwnsScene)
             {
-                group.Scene.LightingInfo.StoreLights(group.Scene.AllNodes.OfType<SceneLight>().ToList());
+                var focus = world.SpawnCameraMatrix?.Translation ?? Vector3.Zero;
+                group.Scene.LightingInfo.StoreLights(group.Scene.AllNodes.OfType<SceneLight>().ToList(), focus);
             }
 
             world.LoadAfterEntities();

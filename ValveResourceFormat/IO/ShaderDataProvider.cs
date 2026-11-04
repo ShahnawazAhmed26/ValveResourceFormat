@@ -605,12 +605,6 @@ namespace ValveResourceFormat.IO
         /// </summary>
         private Dictionary<string, long>? GetIntAttributes_Internal(Material material, IReadOnlyDictionary<string, long> combos)
         {
-            // Source 1 shaders have no compiled file to read
-            if (material.ShaderName.StartsWith(Material.Source1ShaderPrefix, StringComparison.Ordinal))
-            {
-                return null;
-            }
-
             var shader = fileLoader.LoadShader(material.ShaderName);
 
             if (shader?.Pixel == null || GetStaticComboEntry(shader, shader.Pixel, combos) is not { } staticComboEntry)

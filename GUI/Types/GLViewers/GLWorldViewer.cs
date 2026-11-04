@@ -32,7 +32,7 @@ namespace GUI.Types.GLViewers
     /// <summary>
     /// GL Render control with world controls (render mode, camera selection).
     /// </summary>
-    class GLWorldViewer : GLSceneViewer, IEntityMapViewer
+    class GLWorldViewer : GLSceneViewer
     {
         private readonly World? world;
         private readonly WorldNode? worldNode;
@@ -57,9 +57,6 @@ namespace GUI.Types.GLViewers
         private List<Matrix4x4> CameraMatrices = [];
         private WorldNodeLoader? LoadedWorldNode;
         public WorldLoader? LoadedWorld;
-
-        string? IEntityMapViewer.MapName => LoadedWorld?.MapName;
-        List<EntityLump.Entity>? IEntityMapViewer.MapEntities => LoadedWorld?.Entities;
         private EntityLump.Entity? entityInfoEntity;
 
         internal enum SimulationState
@@ -91,8 +88,8 @@ namespace GUI.Types.GLViewers
         /// <summary>Whether the I/O graph tab has a node for an entity. Set together with <see cref="ShowEntityInGraph"/>.</summary>
         public Func<EntityLump.Entity, bool>? EntityHasGraphNode { get; set; }
 
-        public GLWorldViewer(VrfGuiContext vrfGuiContext, RendererContext rendererContext, World world, ResourceExtRefList? externalReferences = null)
-            : base(vrfGuiContext, rendererContext)
+        public GLWorldViewer(VrfGuiContext vrfGuiContext, RendererContext rendererContext, World world, ResourceExtRefList? externalReferences = null, EntityClassTable? entityClasses = null)
+            : base(vrfGuiContext, rendererContext, entityClasses)
         {
             this.world = world;
             mapExternalReferences = externalReferences;
@@ -608,7 +605,7 @@ namespace GUI.Types.GLViewers
             }
         }
 
-        public void SelectAndFocusNode(SceneNode node)
+        internal void SelectAndFocusNode(SceneNode node)
         {
             ArgumentNullException.ThrowIfNull(node);
 
@@ -618,7 +615,7 @@ namespace GUI.Types.GLViewers
         }
 
         /// <summary>Bounds to focus on for an entity that has no scene node, at its origin.</summary>
-        public AABB EntityOriginBounds(EntityLump.Entity entity)
+        internal AABB EntityOriginBounds(EntityLump.Entity entity)
         {
             // Try to find the entity in the system and fall back to its lump location otherwise
             var spawned = Renderer.EntitySystem.Entities.FirstOrDefault(candidate => !candidate.IsRemoved && candidate.Data == entity);
@@ -801,7 +798,7 @@ namespace GUI.Types.GLViewers
         }
 
         // Drawn as scenes of their own, such as the 3D sky, with entities the map does not list
-        public IEnumerable<SpawnGroup> OwnSceneSpawnGroups
+        internal IEnumerable<SpawnGroup> OwnSceneSpawnGroups
             => Renderer.EntitySystem.SpawnGroupManager.Groups.Where(static group => group.HasOwnScene);
 
         private static string SpawnGroupSuffix(SpawnGroup spawnGroup)
@@ -1002,23 +999,7 @@ namespace GUI.Types.GLViewers
                 }
 
                 // Set same mesh groups
-                if (glModelViewer.meshGroupListBox != null)
-                {
-                    foreach (int checkedItemIndex in glModelViewer.meshGroupListBox.CheckedIndices)
-                    {
-                        glModelViewer.meshGroupListBox.SetItemChecked(checkedItemIndex, false);
-                    }
-
-                    foreach (var group in worldModel.GetActiveMeshGroups())
-                    {
-                        var item = glModelViewer.meshGroupListBox.FindStringExact(group);
-
-                        if (item != ListBox.NoMatches)
-                        {
-                            glModelViewer.meshGroupListBox.SetItemChecked(item, true);
-                        }
-                    }
-                }
+                glModelViewer.SetMeshGroupSelection(worldModel.GetActiveMeshGroups());
 
                 // Set same material group
                 if (glModelViewer.materialGroupListBox != null && worldModel.ActiveMaterialGroup != null)

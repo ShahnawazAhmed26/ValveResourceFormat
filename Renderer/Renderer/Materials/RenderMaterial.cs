@@ -34,16 +34,16 @@ namespace ValveResourceFormat.Renderer.Materials
         [SamplerName("g_tFogCubeTexture")]
         FogCubeTexture,
         /// <summary>Baked irradiance, from the lightmap or the light probe volume.</summary>
-        [SamplerName("g_tIrradiance", "g_tLPV_Irradiance")]
+        [SamplerName("g_tIrradiance", "g_tLPV_Irradiance", "g_tLightmap")]
         Lightmap1,
         /// <summary>Baked directional irradiance, whole, red split, or a luminance direction.</summary>
-        [SamplerName("g_tDirectionalIrradiance", "g_tDirectionalIrradianceR", "g_tDirectionalIrradianceLum")]
+        [SamplerName("g_tDirectionalIrradiance", "g_tDirectionalIrradianceR", "g_tDirectionalIrradianceLum", "g_tLightmapBump1")]
         Lightmap2,
         /// <summary>Baked direct light indices, or green split directional irradiance.</summary>
-        [SamplerName("g_tDirectLightIndices", "g_tLPV_Indices", "g_tDirectionalIrradianceG")]
+        [SamplerName("g_tDirectLightIndices", "g_tLPV_Indices", "g_tDirectionalIrradianceG", "g_tLightmapBump2")]
         Lightmap3,
         /// <summary>Baked direct light strengths, or blue split directional irradiance.</summary>
-        [SamplerName("g_tDirectLightStrengths", "g_tLPV_Scalars", "g_tDirectionalIrradianceB")]
+        [SamplerName("g_tDirectLightStrengths", "g_tLPV_Scalars", "g_tDirectionalIrradianceB", "g_tLightmapBump3")]
         Lightmap4,
         /// <summary>Baked direct light shadows.</summary>
         [SamplerName("g_tDirectLightShadows", "g_tLPV_Shadows")]
@@ -214,10 +214,9 @@ namespace ValveResourceFormat.Renderer.Materials
         /// <param name="material">The parsed Source 2 material data.</param>
         /// <param name="rendererContext">The renderer context used to load shaders and textures.</param>
         /// <param name="shaderArguments">Optional caller-supplied static combo values used as a base; the material's own shader arguments are merged in afterward and take precedence on conflicting keys.</param>
-        /// <param name="shaderDataProvider">Provider of the shader data of the material, for a shader the game of the context does not ship. The provider of the context when <see langword="null"/>.</param>
         [SetsRequiredMembers]
-        public RenderMaterial(Material material, RendererContext rendererContext, Dictionary<string, byte>? shaderArguments, IShaderDataProvider? shaderDataProvider = null)
-            : this(material, shaderDataProvider ?? rendererContext.ShaderDataProvider)
+        public RenderMaterial(Material material, RendererContext rendererContext, Dictionary<string, byte>? shaderArguments)
+            : this(material, rendererContext.ShaderDataProvider)
         {
             Loader = rendererContext.MaterialLoader;
 
@@ -232,7 +231,8 @@ namespace ValveResourceFormat.Renderer.Materials
                 }
             }
 
-            if (ShaderName == "sky.vfx")
+            // The format states of the compiled shader are only needed to read a texture format other than the default
+            if (ShaderName == "sky.vfx" && HasTextureFormatArgument(combinedShaderParameters))
             {
                 ShaderCollection? shader = null;
 
@@ -272,6 +272,19 @@ namespace ValveResourceFormat.Renderer.Materials
             Shader = rendererContext.ShaderLoader.LoadShader(ShaderName, combinedShaderParameters, blocking: false);
 
             SortId = GetSortId();
+        }
+
+        private static bool HasTextureFormatArgument(Dictionary<string, byte> arguments)
+        {
+            foreach (var name in arguments.Keys)
+            {
+                if (name.StartsWith("F_TEXTURE_FORMAT", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>Initializes a new instance of the <see cref="RenderMaterial"/> class wrapping an existing shader with an empty material.</summary>
@@ -621,7 +634,8 @@ namespace ValveResourceFormat.Renderer.Materials
             {
                 var addressModeU = ToAddressMode(IntParams.GetValueOrDefault("g_nTextureAddressModeU"));
                 var addressModeV = ToAddressMode(IntParams.GetValueOrDefault("g_nTextureAddressModeV"));
-                userConfigSampler = Loader.GetOrCreateSampler(addressModeU, addressModeV);
+                var pointSample = IntParams.GetValueOrDefault("g_nTextureFilter") != 0;
+                userConfigSampler = Loader.GetOrCreateSampler(addressModeU, addressModeV, pointSample: pointSample);
 
                 static RsTextureAddressMode ToAddressMode(long mode)
                     => mode is >= 0 and <= (long)RsTextureAddressMode.MirrorOnce
@@ -641,6 +655,11 @@ namespace ValveResourceFormat.Renderer.Materials
                 if (userConfigSampler != 0 && shader.SamplerUserConfigUniforms.Contains(name))
                 {
                     GL.BindSampler(textureUnit, userConfigSampler);
+                    boundSamplerUnits.Add(textureUnit);
+                }
+                else if (shader.SamplerClampUniforms.Contains(name) && Loader != null)
+                {
+                    GL.BindSampler(textureUnit, Loader.GetOrCreateSampler(RsTextureAddressMode.Clamp, RsTextureAddressMode.Clamp));
                     boundSamplerUnits.Add(textureUnit);
                 }
 

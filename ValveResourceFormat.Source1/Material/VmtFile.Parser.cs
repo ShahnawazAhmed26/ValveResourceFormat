@@ -152,7 +152,13 @@ internal sealed partial class VmtFile
 
             while (Peek().Kind != TokenKind.End)
             {
-                var name = ReadValue();
+                var name = Take();
+
+                // An empty key name ends the document
+                if (name.Text.Length == 0)
+                {
+                    break;
+                }
 
                 if (name.Text.Equals("#base", StringComparison.OrdinalIgnoreCase)
                     || name.Text.Equals("#include", StringComparison.OrdinalIgnoreCase))
@@ -175,9 +181,11 @@ internal sealed partial class VmtFile
 
                 var accepted = ReadConditions();
 
-                if (Take().Kind != TokenKind.Open || string.IsNullOrWhiteSpace(name.Text))
+                // A key without a block is skipped along with the token after it, so stray text between
+                // or after the shader blocks is read as keys until a block opens.
+                if (Take().Kind != TokenKind.Open)
                 {
-                    throw new InvalidDataException($"Expected a named VMT shader block in {path}:{name.Line}.");
+                    continue;
                 }
 
                 var root = new VmtNode(name.Text, null, ReadBlockContents(0));
@@ -256,6 +264,12 @@ internal sealed partial class VmtFile
                     return children;
                 }
 
+                // The game keeps what it read of a block that the file does not close
+                if (Peek().Kind == TokenKind.End)
+                {
+                    return children;
+                }
+
                 var key = ReadValue();
                 var accepted = ReadKeyCondition(key, out var name);
                 accepted &= ReadConditions();
@@ -276,6 +290,11 @@ internal sealed partial class VmtFile
                 else if (value.Kind == TokenKind.Value)
                 {
                     node = new VmtNode(name, value.Text, []);
+                }
+                else if (value.Kind is TokenKind.Close or TokenKind.End)
+                {
+                    // A key with no value ends the block, and the game keeps what it read before it
+                    return children;
                 }
                 else
                 {

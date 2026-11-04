@@ -135,9 +135,18 @@ namespace ValveResourceFormat.Renderer.World
                         modelNode.SetOverrideLod(lodOverride);
                     }
 
+                    var fadeStartDistance = sceneObject.GetFloatProperty("m_flFadeStartDistance");
+                    var fadeEndDistance = sceneObject.GetFloatProperty("m_flFadeEndDistance");
+                    var fades = fadeEndDistance > 0f;
+
+                    if (fades)
+                    {
+                        modelNode.SetDistanceFade(fadeStartDistance, fadeEndDistance);
+                    }
+
                     ApplyMaterialOverrides(modelNode, [.. materialOverrides[(uint)sceneObjectIndex]]);
                     extraVertexStreams.Apply(modelNode, (uint)sceneObjectIndex);
-                    scene.Add(modelNode, !isStatic);
+                    scene.Add(modelNode, !isStatic || fades);
                     IncludeBounds(modelNode);
                 }
 
@@ -368,8 +377,14 @@ namespace ValveResourceFormat.Renderer.World
                     var stream = Streams.VertexBuffers[streamOverride.BufferIndex];
                     var (mesh, drawCall) = FindDrawCall(modelNode, streamOverride.SubSceneObject, streamOverride.DrawCallIndex);
 
-                    // Streams painted on an older version of the model no longer match its vertex count
-                    if (mesh is null || drawCall?.VertexCount != stream.ElementCount)
+                    if (mesh is null || drawCall is null)
+                    {
+                        continue;
+                    }
+
+                    // A stream has to cover the vertices the draw call reads, which start at its base vertex.
+                    // Streams painted on an older version of the model no longer reach them.
+                    if (stream.ElementCount < drawCall.BaseVertex + drawCall.VertexCount)
                     {
                         continue;
                     }

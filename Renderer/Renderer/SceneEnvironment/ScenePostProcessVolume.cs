@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Linq;
 using System.Runtime.CompilerServices;
 using OpenTK.Graphics.OpenGL;
 using ValveKeyValue;
@@ -344,34 +343,47 @@ namespace ValveResourceFormat.Renderer.SceneEnvironment
             };
         }
 
-        /// <summary>Parses a <see cref="BloomSettings"/> from a KV object.</summary>
+        /// <summary>Parses a <see cref="BloomSettings"/> from a KV object. A field the object does not have keeps its default.</summary>
         public static BloomSettings ParseFromKVObject(KVObject data)
         {
-            var blurWeightData = data.GetFloatArray("m_flBlurWeight");
-            var blurTintData = data.GetArray("m_vBlurTint").Select(v => v.ToVector3()).ToArray();
+            var defaults = new BloomSettings();
+            var blurWeight = defaults.BlurWeight;
+            var blurTint = defaults.BlurTint;
 
-            Debug.Assert(blurWeightData.Length == NumBlurBuffers);
-            Debug.Assert(blurTintData.Length == NumBlurBuffers);
-
-            var blurWeight = new BlurWeights();
-            var blurTint = new BlurTints();
-
-            for (var i = 0; i < NumBlurBuffers; i++)
+            if (data.ContainsKey("m_flBlurWeight"))
             {
-                blurWeight[i] = blurWeightData[i];
-                blurTint[i] = blurTintData[i];
+                var blurWeightData = data.GetFloatArray("m_flBlurWeight");
+                Debug.Assert(blurWeightData.Length == NumBlurBuffers);
+
+                for (var i = 0; i < NumBlurBuffers; i++)
+                {
+                    blurWeight[i] = blurWeightData[i];
+                }
             }
+
+            if (data.ContainsKey("m_vBlurTint"))
+            {
+                var blurTintData = data.GetArray("m_vBlurTint");
+                Debug.Assert(blurTintData.Count == NumBlurBuffers);
+
+                for (var i = 0; i < NumBlurBuffers; i++)
+                {
+                    blurTint[i] = blurTintData[i].ToVector3();
+                }
+            }
+
+            var blendMode = data.ContainsKey("m_blendMode") ? data.GetEnumValue<BloomBlendType>("m_blendMode") : defaults.BlendMode;
 
             return new BloomSettings
             {
-                BlendMode = data.GetEnumValue<BloomBlendType>("m_blendMode"),
-                AddBloomStrength = data.GetFloatProperty("m_flBloomStrength"),
-                ScreenBloomStrength = data.GetFloatProperty("m_flScreenBloomStrength"),
-                BlurBloomStrength = data.GetFloatProperty("m_flBlurBloomStrength"),
-                BloomThreshold = data.GetFloatProperty("m_flBloomThreshold"),
-                BloomThresholdWidth = data.GetFloatProperty("m_flBloomThresholdWidth"),
-                SkyboxBloomStrength = data.GetFloatProperty("m_flSkyboxBloomStrength"),
-                BloomStartValue = data.GetFloatProperty("m_flBloomStartValue"),
+                BlendMode = blendMode,
+                AddBloomStrength = data.GetFloatProperty("m_flBloomStrength", defaults.AddBloomStrength),
+                ScreenBloomStrength = data.GetFloatProperty("m_flScreenBloomStrength", defaults.ScreenBloomStrength),
+                BlurBloomStrength = data.GetFloatProperty("m_flBlurBloomStrength", defaults.BlurBloomStrength),
+                BloomThreshold = data.GetFloatProperty("m_flBloomThreshold", defaults.BloomThreshold),
+                BloomThresholdWidth = data.GetFloatProperty("m_flBloomThresholdWidth", defaults.BloomThresholdWidth),
+                SkyboxBloomStrength = data.GetFloatProperty("m_flSkyboxBloomStrength", defaults.SkyboxBloomStrength),
+                BloomStartValue = data.GetFloatProperty("m_flBloomStartValue", defaults.BloomStartValue),
                 BlurWeight = blurWeight,
                 BlurTint = blurTint,
             };

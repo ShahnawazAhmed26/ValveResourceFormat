@@ -306,6 +306,78 @@ internal sealed partial class MdlFile
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    private struct StudioFlexController
+    {
+        public int TypeIndex;
+        public int NameIndex;
+        public int LocalToGlobal;
+        public float Min;
+        public float Max;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    private struct StudioFlexRule
+    {
+        public int Flex;
+        public int NumOps;
+        public int OpIndex;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    private struct StudioFlexOp
+    {
+        public int Op;
+        public int Data;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1, Size = 172)]
+    private struct StudioEyeball
+    {
+        public int NameIndex;
+        public int Bone;
+        public Vector3 Origin;
+        public float ZOffset;
+        public float Radius;
+        public Vector3 Up;
+        public Vector3 Forward;
+        public int Texture;
+        public int _unused1;
+        public float IrisScale;
+        public int _unused2;
+        public LidFlexDescs UpperFlexDescs;
+        public LidFlexDescs LowerFlexDescs;
+        public Vector3 UpperTargets;
+        public Vector3 LowerTargets;
+        public int UpperLidFlexDesc;
+        public int LowerLidFlexDesc;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
+        public int[] _unused;
+
+        [MarshalAs(UnmanagedType.U1)]
+        public bool NonFacs;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    private struct LidFlexDescs
+    {
+        public int Raiser;
+        public int Neutral;
+        public int Lowerer;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1, Size = 60)]
+    private struct StudioFlex
+    {
+        public int FlexDesc;
+        public Vector4 Targets;
+        public int NumVertices;
+        public int VertexIndex;
+        public int FlexPair;
+        public byte VertexAnimType;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
     private struct HitboxSetHeader
     {
         public int NameIndex;

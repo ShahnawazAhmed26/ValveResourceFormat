@@ -60,6 +60,11 @@ public static partial class EntityClassCatalog
 
     private static EntityClassTable FindTable(IFileLoader fileLoader, ILogger logger)
     {
+        if (fileLoader is GameFileLoader { ResourceProvider: { } provider } && provider.GetEntityClasses(logger) is { } providerTable)
+        {
+            return providerTable;
+        }
+
         var game = fileLoader.GameInfo.Game;
 
         if (BuiltIn.Value.Games.TryGetValue(game, out var table))

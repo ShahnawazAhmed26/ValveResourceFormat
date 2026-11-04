@@ -380,14 +380,18 @@ namespace ValveResourceFormat.Renderer.World
         }
 
         private List<SceneLight> storedLights = [];
+        private Vector3 lightFocus;
         private bool usesUniformLightStore;
 
         /// <summary>
         /// Stores the map's lights to GPU, replacing any stored before.
         /// </summary>
-        public void StoreLights(List<SceneLight> lights)
+        /// <param name="lights">The lights of the map.</param>
+        /// <param name="focus">Where the map is first seen from. A store that holds fewer lights than the map has keeps the ones nearest to it.</param>
+        public void StoreLights(List<SceneLight> lights, Vector3 focus)
         {
             storedLights = lights;
+            lightFocus = focus;
             usesUniformLightStore = (LightmapVersionNumber, LightmapGameVersionNumber) is (6, 0) or (8, 0) or (8, 1);
 
             if (usesUniformLightStore)
@@ -571,8 +575,16 @@ namespace ValveResourceFormat.Renderer.World
             }
 
             var currentLightIndex = LightingData.StaticLightCount;
+            var dynamicLights = lights.Where(IsDynamicSegmentLight).ToList();
 
-            foreach (var light in lights.Where(IsDynamicSegmentLight))
+            // The lights that do not fit in the store are dropped, so the ones nearest to where the map is seen from go first
+            if (currentLightIndex + dynamicLights.Count > LightingConstants.MAX_LIGHTS)
+            {
+                var focus = lightFocus;
+                dynamicLights = [.. dynamicLights.OrderBy(light => Vector3.DistanceSquared(light.Position, focus))];
+            }
+
+            foreach (var light in dynamicLights)
             {
                 if (currentLightIndex >= LightingConstants.MAX_LIGHTS)
                 {

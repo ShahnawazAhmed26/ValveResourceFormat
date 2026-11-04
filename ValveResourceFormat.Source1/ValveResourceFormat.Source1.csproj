@@ -5,6 +5,7 @@
     <IsAotCompatible Condition="'$(Configuration)' != 'Debug'">true</IsAotCompatible>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateDocumentationFile Condition="'$(Configuration)' != 'Debug'">true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Entities\entity_classes.kv3" />

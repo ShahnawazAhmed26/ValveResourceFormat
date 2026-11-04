@@ -9,6 +9,17 @@ namespace ValveResourceFormat.Renderer.Entities;
 /// <seealso href="https://s2v.app/SchemaExplorer/cs2/server/CFogController">CFogController</seealso>
 public sealed class EnvFogController : BaseEntity
 {
+    /// <summary>What an <c>env_fog_controller</c>'s <c>spawnflags</c> mean.</summary>
+    [Flags]
+    public enum SpawnFlag : uint
+    {
+        /// <summary>No flags.</summary>
+        None = 0,
+
+        /// <summary>Sets the fog of its scene, over the other fog controllers.</summary>
+        Master = 1,
+    }
+
     // The values a transition blends, with colors in sRGB
     private readonly record struct FogValues(Vector3 Color, Vector3 SecondaryColor, float Start, float End, float MaxDensity)
     {
@@ -26,6 +37,7 @@ public sealed class EnvFogController : BaseEntity
     private float transitionStartTime;
     private float transitionDuration;
     private bool enabled;
+    private bool setsSceneFog;
     private float farZ;
     private float exponent;
     private float hdrColorScale;
@@ -58,14 +70,52 @@ public sealed class EnvFogController : BaseEntity
         transitionDuration = KeyValues.GetFloatProperty("foglerptime");
 
         blendDirection = GetBlendDirection(KeyValues, WorldAngles);
+    }
+
+    /// <inheritdoc/>
+    public override void Activate()
+    {
+        base.Activate();
+
+        setsSceneFog = FindSceneFogController() == this;
+
+        if (!setsSceneFog)
+        {
+            return;
+        }
+
+        // A fog that covers everything drawn, and not only the 2D sky
+        if (KeyValues.GetBooleanProperty("fogobjects"))
+        {
+            Scene.FogInfo.ObjectsUseLinearFog = true;
+        }
 
         UpdateFog();
     }
 
-    /// <summary>Gets the direction the fog color blends along, or null for a fog that does not blend.</summary>
-    /// <param name="keyValues">The keyvalues of a fog controller or a <c>sky_camera</c>.</param>
-    /// <param name="angles">The angles of the entity, for a fog that blends along them.</param>
-    internal static Vector3? GetBlendDirection(EntityLump.Entity keyValues, Vector3 angles)
+    // A scene is fogged by its last master fog controller, or by its first one when none is a master
+    private EnvFogController? FindSceneFogController()
+    {
+        EnvFogController? sceneFogController = null;
+
+        foreach (var entity in EntitySystem.Entities)
+        {
+            if (entity is not EnvFogController controller || controller.Scene != Scene)
+            {
+                continue;
+            }
+
+            if (sceneFogController == null || controller.HasSpawnFlags(SpawnFlag.Master))
+            {
+                sceneFogController = controller;
+            }
+        }
+
+        return sceneFogController;
+    }
+
+    // The direction the fog color blends along, or null for a fog that does not blend
+    private static Vector3? GetBlendDirection(EntityLump.Entity keyValues, Vector3 angles)
     {
         if (!keyValues.GetBooleanProperty("fogblend"))
         {
@@ -93,6 +143,11 @@ public sealed class EnvFogController : BaseEntity
 
     private void UpdateFog()
     {
+        if (!setsSceneFog)
+        {
+            return;
+        }
+
         // A fog that is off covers nothing, though it keeps its color
         var maxDensity = enabled ? Math.Clamp(current.MaxDensity, 0f, 1f) : 0f;
 

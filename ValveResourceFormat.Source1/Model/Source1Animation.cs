@@ -315,6 +315,28 @@ internal sealed partial class Source1Sequence
     /// <summary>Whether the sequence holds additive data.</summary>
     public bool IsDelta => (Flags & Source1AnimationFlags.Delta) != 0;
 
+    /// <summary>Whether every animation of the sequence has its data, for every bone of the model.</summary>
+    public bool IsPlayable
+    {
+        get
+        {
+            if (Model == null || Blends.Length == 0)
+            {
+                return false;
+            }
+
+            foreach (var blend in Blends)
+            {
+                if (!blend.IsDataAvailable || blend.FrameCount <= 0 || blend.BoneCount != Model.Bones.Length)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
+
     /// <summary>Index of the sequence in the model file it comes from.</summary>
     public required int Index { get; init; }
 

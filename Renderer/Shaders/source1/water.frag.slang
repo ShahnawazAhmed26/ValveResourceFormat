@@ -9,7 +9,7 @@
 in vec3 vFragPosition;
 in vec2 vTexCoordOut;
 
-uniform sampler2D g_tNormal;
+uniform sampler2D g_tNormal; // Sampler(UserConfig)
 uniform sampler2D g_tSceneColor; // reserved
 
 uniform int F_BUMPMAP;
@@ -71,7 +71,7 @@ void main()
 
         if (F_ENVMAP != 0)
         {
-            cheapReflection = texture(g_tEnvMap, reflectionDirection).rgb;
+            cheapReflection = SampleSource1Cube(reflectionDirection);
         }
         else
         {
@@ -91,7 +91,7 @@ void main()
 
     if (F_ENVMAP != 0)
     {
-        reflection = texture(g_tEnvMap, reflect(-eyeDirection, normal)).rgb;
+        reflection = SampleSource1Cube(reflect(-eyeDirection, normal));
     }
     else
     {

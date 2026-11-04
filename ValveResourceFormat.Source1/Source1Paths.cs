@@ -10,6 +10,10 @@ namespace ValveResourceFormat.Source1;
 internal static class Source1Paths
 {
     private const string MaterialsFolder = "materials/";
+    private const char VariantSeparator = '#';
+
+    /// <summary>The path of a texture that is one black pixel, which a surface without a base color reads.</summary>
+    public const string BlackTexturePath = "materials/_black.vtf";
 
     /// <summary>
     /// Decodes a name stored in a map as UTF-8, or as Latin-1 when the bytes are not valid UTF-8.
@@ -84,6 +88,38 @@ internal static class Source1Paths
         }
 
         return name[..extensionStart];
+    }
+
+    /// <summary>
+    /// Names a variant of a file by putting its name before the extension, such as the frame of a texture or the shader of a material.
+    /// </summary>
+    public static string AddVariant(string path, string variant)
+    {
+        var extension = Path.GetExtension(path);
+
+        var stem = path[..^extension.Length];
+
+        return stem + VariantSeparator + variant + extension;
+    }
+
+    /// <summary>
+    /// Splits the name of a variant off a path made by <see cref="AddVariant"/>.
+    /// </summary>
+    /// <returns>The path of the file the variant is made from.</returns>
+    public static string RemoveVariant(string path, out string? variant)
+    {
+        var extension = Path.GetExtension(path);
+        var stem = path.AsSpan(0, path.Length - extension.Length);
+        var separator = stem.LastIndexOf(VariantSeparator);
+
+        if (separator < 0)
+        {
+            variant = null;
+            return path;
+        }
+
+        variant = stem[(separator + 1)..].ToString();
+        return string.Concat(stem[..separator], extension);
     }
 
     private static string AddMaterialsFolder(string path)

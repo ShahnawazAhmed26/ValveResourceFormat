@@ -11,14 +11,14 @@ in vec4 vTangentOut;
 in vec2 vTexCoordOut;
 in vec4 vVertexColorOut;
 
-#if (D_BAKED_LIGHTING == 1)
+#if (D_BAKED_LIGHTING_FROM_VERTEX_STREAM == 1)
     in vec3 vBakedLightOut;
 #endif
 
-uniform sampler2D g_tColor; // SrgbRead(true) RepresentativeTexture
-uniform sampler2D g_tDetail;
-uniform sampler2D g_tSelfIllumMask;
-uniform sampler2D g_tNormal;
+uniform sampler2D g_tColor; // SrgbRead(true) Sampler(UserConfig) RepresentativeTexture Default(White)
+uniform sampler2D g_tDetail; // Sampler(UserConfig) Default(White)
+uniform sampler2D g_tSelfIllumMask; // Sampler(UserConfig) Default(White)
+uniform sampler2D g_tNormal; // Sampler(UserConfig)
 
 uniform int F_BUMPMAP;
 uniform int F_BASEMAP_ALPHA_PHONG_MASK;
@@ -35,23 +35,6 @@ uniform float g_flPhongExponent = 0.0;
 uniform float g_flPhongExponentFactor = 0.0;
 uniform float g_flPhongBoost = 1.0;
 uniform float g_flRimLightBoost = 1.0;
-
-// The phong fresnel, a piecewise curve of the traditional fresnel through the min, mid and max of the ranges
-float GetSource1FresnelRanges(vec3 normal, vec3 eyeDirection, vec4 ranges)
-{
-    float lowSlope = (ranges.y - ranges.x) * 2.0;
-    float highSlope = (ranges.z - ranges.y) * 2.0;
-
-    float fresnel = saturate(1.0 - dot(normal, eyeDirection));
-    fresnel = fresnel * fresnel - 0.5;
-
-    if (fresnel >= 0.0)
-    {
-        return ranges.y + highSlope * fresnel;
-    }
-
-    return ranges.y + lowSlope * fresnel;
-}
 
 void main()
 {
@@ -128,7 +111,7 @@ void main()
     vec3 specularLight = vec3(0.0);
     vec3 rimLight = vec3(0.0);
 
-#if (D_BAKED_LIGHTING == 1)
+#if (D_BAKED_LIGHTING_FROM_VERTEX_STREAM == 1)
     vec3 diffuseLight = vBakedLightOut;
     vec3 unusedDiffuse = vec3(0.0);
     AddSource1SceneLights(unusedDiffuse, specularLight, rimLight, vFragPosition, normal, eyeDirection, specularExponent, fresnelRanges);

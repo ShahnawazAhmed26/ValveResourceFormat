@@ -9,7 +9,7 @@ in vec2 vTexCoordOut;
 in vec4 vVertexColorOut;
 flat in vec4 vGlowProxyOut;
 
-uniform sampler2D g_tColor; // SrgbRead(true) RepresentativeTexture
+uniform sampler2D g_tColor; // SrgbRead(true) Sampler(UserConfig) RepresentativeTexture Default(White)
 
 uniform int F_ADDITIVE_BLEND;
 

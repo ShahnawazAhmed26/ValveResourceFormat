@@ -72,12 +72,60 @@ internal static class Source1EntityClassCatalog
                 continue;
             }
 
-            source1Games.Add(game.AppId, game.Table);
+            source1Games.Add(game.AppId, WithoutUndrawnHelpers(game.Table));
             source1Classes.AddRange(game.Table.Classes);
         }
 
-        var source1Merged = new EntityClassTable(EntityClassReader.MergeClasses(source1Classes), null);
+        var source1Merged = WithoutUndrawnHelpers(new EntityClassTable(EntityClassReader.MergeClasses(source1Classes), null));
 
         return new BuiltInTables(source1Games, source1Merged, goldSrcGames);
+    }
+
+    // The FGD files of the games declare helpers that have nothing to draw in a converted map
+    private static readonly HashSet<string> UndrawnHelpers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "sidelist", "animator", "sprite", "keyframe", "decal", "quadbounds", "overlay", "overlay_transition", "mapsize", "instance", "cylinder",
+    };
+
+    private static EntityClassTable WithoutUndrawnHelpers(EntityClassTable table)
+    {
+        var classes = new List<EntityClass>(table.Classes.Count);
+
+        foreach (var entityClass in table.Classes)
+        {
+            classes.Add(WithoutUndrawnHelpers(entityClass));
+        }
+
+        return new EntityClassTable(classes, table.GridNav);
+    }
+
+    private static EntityClass WithoutUndrawnHelpers(EntityClass entityClass)
+    {
+        var helpers = new List<HelperDeclaration>();
+
+        foreach (var helper in entityClass.Helpers)
+        {
+            if (!UndrawnHelpers.Contains(helper.Name))
+            {
+                helpers.Add(helper);
+            }
+        }
+
+        if (helpers.Count == entityClass.Helpers.Count)
+        {
+            return entityClass;
+        }
+
+        return new EntityClass
+        {
+            Name = entityClass.Name,
+            Kind = entityClass.Kind,
+            Size = entityClass.Size,
+            Helpers = helpers,
+            PreviewAnimationKeys = entityClass.PreviewAnimationKeys,
+            BaseClasses = entityClass.BaseClasses,
+            RequiredParentClass = entityClass.RequiredParentClass,
+            AutoApplyMaterial = entityClass.AutoApplyMaterial,
+        };
     }
 }

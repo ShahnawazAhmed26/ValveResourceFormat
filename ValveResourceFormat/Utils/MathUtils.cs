@@ -107,6 +107,20 @@ namespace ValveResourceFormat.Utils
         }
 
         /// <summary>
+        /// Evaluates a uniform Catmull-Rom spline between <paramref name="p1"/> (t = 0) and <paramref name="p2"/> (t = 1).
+        /// </summary>
+        public static Vector3 CatmullRom(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, float t)
+        {
+            var t2 = t * t;
+            var t3 = t2 * t;
+
+            return 0.5f * ((2f * p1)
+                + ((-p0 + p2) * t)
+                + (((2f * p0) - (5f * p1) + (4f * p2) - p3) * t2)
+                + ((-p0 + (3f * p1) - (3f * p2) + p3) * t3));
+        }
+
+        /// <summary>
         /// Scales <paramref name="value"/> to unit length, returning <paramref name="fallback"/> when its
         /// squared length does not exceed <paramref name="minimumLengthSquared"/>.
         /// </summary>

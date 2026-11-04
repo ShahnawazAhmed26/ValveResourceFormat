@@ -1,5 +1,9 @@
 using System.IO;
+using ValveResourceFormat.Source1;
+using ValveResourceFormat.Source1.Bsp;
 using ValveResourceFormat.Source1.FileSystem;
+using ValveResourceFormat.Source1.Model;
+using ValveResourceFormat.Source1.Texture;
 
 namespace GUI.Utils;
 
@@ -47,6 +51,189 @@ static class Source1Content
     /// </summary>
     public static Source1FileSystem? Create(VrfGuiContext vrfGuiContext)
         => Source1FileSystem.FromPath(GetDiskPath(vrfGuiContext));
+
+    /// <summary>
+    /// Makes the file loader of a renderer context serve the files of the game as Source 2 resources.
+    /// </summary>
+    /// <returns>The provider, or <see langword="null"/> when the game is not known and nothing is served.</returns>
+    public static Source1ResourceProvider? Mount(VrfGuiContext vrfGuiContext, Source1FileSystem? fileSystem)
+    {
+        if (fileSystem == null)
+        {
+            return null;
+        }
+
+        var provider = new Source1ResourceProvider(fileSystem, VrfGuiContext.Logger);
+        vrfGuiContext.ResourceProvider = provider;
+
+        return provider;
+    }
+
+    /// <summary>"VTF" and a zero byte.</summary>
+    private const uint TextureMagic = 0x00465456;
+
+    /// <summary>"IDST", the magic of a studio model.</summary>
+    private const uint ModelMagic = 0x54534449;
+
+    /// <summary>"VBSP", the magic of a map.</summary>
+    private const uint MapMagic = 0x50534256;
+
+    /// <summary>
+    /// Whether the file is a Source 1 texture, model, map or material.
+    /// </summary>
+    public static bool IsAccepted(uint magic, string fileName)
+        => magic is TextureMagic or ModelMagic or MapMagic
+        || fileName.EndsWith(".vmt", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A Source 1 file converted to a Source 2 resource.</summary>
+    /// <param name="Resource">The converted resource.</param>
+    /// <param name="OwnedFileSystem">The file system of the game that only this file uses, or <see langword="null"/>.</param>
+    public record struct ConvertedFile(ValveResourceFormat.Resource Resource, Source1FileSystem? OwnedFileSystem);
+
+    /// <summary>
+    /// Mounts the game of the file on the context and converts the file to a Source 2 resource.
+    /// </summary>
+    /// <param name="vrfGuiContext">The context of the file, which serves the other files of the game afterwards.</param>
+    /// <param name="stream">The stream of the file, or <see langword="null"/> to read it from disk.</param>
+    /// <param name="magic">The first four bytes of the file.</param>
+    public static ConvertedFile Convert(VrfGuiContext vrfGuiContext, Stream? stream, uint magic)
+    {
+        switch (magic)
+        {
+            case TextureMagic:
+                return new ConvertedFile(ConvertTexture(vrfGuiContext, stream), null);
+
+            case ModelMagic:
+                return new ConvertedFile(ConvertModel(vrfGuiContext, stream), null);
+
+            case MapMagic:
+                return ConvertMap(vrfGuiContext, stream);
+
+            default:
+                return new ConvertedFile(LoadMaterial(vrfGuiContext), null);
+        }
+    }
+
+    private static ValveResourceFormat.Resource ConvertTexture(VrfGuiContext vrfGuiContext, Stream? stream)
+    {
+        var input = OpenFile(vrfGuiContext, stream);
+
+        try
+        {
+            var vtf = new VtfFile(input);
+            var resource = Source1TextureConverter.Convert(vtf);
+            resource.FileName = vrfGuiContext.FileName;
+
+            return resource;
+        }
+        finally
+        {
+            if (stream == null)
+            {
+                input.Dispose();
+            }
+        }
+    }
+
+    private static ValveResourceFormat.Resource ConvertModel(VrfGuiContext vrfGuiContext, Stream? stream)
+    {
+        var fileSystem = GetShared(vrfGuiContext);
+        var modelPath = GetGamePath(vrfGuiContext, fileSystem);
+
+        var package = vrfGuiContext.CurrentPackage;
+        var modelDirectory = Path.GetDirectoryName(vrfGuiContext.FileName);
+
+        // The model's other files must come from the same place as the model, the game can override them with another build
+        Stream? OpenModelFile(string path)
+        {
+            if (path.Equals(modelPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return OpenFile(vrfGuiContext, stream);
+            }
+
+            if (package != null)
+            {
+                var entry = package.FindEntry(path);
+
+                if (entry != null)
+                {
+                    return package.GetMemoryMappedStreamIfPossible(entry);
+                }
+            }
+            else if (modelDirectory != null)
+            {
+                var diskPath = Path.Combine(modelDirectory, Path.GetFileName(path));
+
+                if (File.Exists(diskPath))
+                {
+                    return new FileStream(diskPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                }
+            }
+
+            return fileSystem?.OpenFile(path);
+        }
+
+        var model = Source1Model.Load(modelPath, OpenModelFile);
+
+        Mount(vrfGuiContext, fileSystem);
+
+        var converted = Source1ModelConverter.Convert(model, modelPath, path => fileSystem?.Exists(path) ?? false);
+        converted.Resource.FileName = vrfGuiContext.FileName;
+
+        return converted.Resource;
+    }
+
+    private static ConvertedFile ConvertMap(VrfGuiContext vrfGuiContext, Stream? stream)
+    {
+        var input = OpenFile(vrfGuiContext, stream);
+        BspFile bsp;
+
+        try
+        {
+            bsp = BspFile.Open(input, Path.GetFileNameWithoutExtension(vrfGuiContext.FileName));
+        }
+        finally
+        {
+            if (stream == null)
+            {
+                input.Dispose();
+            }
+        }
+
+        // Owned by the viewer, so the map can mount its pakfile without leaking it into other files of the game
+#pragma warning disable CA2000 // Handed to the viewer in the result, and disposed here when the conversion fails
+        var fileSystem = Create(vrfGuiContext)
+            ?? throw new InvalidOperationException("A Source 1 map needs the files of its game.");
+#pragma warning restore CA2000
+
+        try
+        {
+            var provider = Mount(vrfGuiContext, fileSystem)!;
+            var map = provider.LoadMap(bsp);
+            var mapPath = $"{map.MapPath}.vmap";
+            var resource = provider.LoadFile(mapPath)
+                ?? throw new InvalidDataException($"The converted map has no map '{mapPath}'.");
+            resource.FileName = mapPath;
+
+            return new ConvertedFile(resource, fileSystem);
+        }
+        catch
+        {
+            fileSystem.Dispose();
+            throw;
+        }
+    }
+
+    private static ValveResourceFormat.Resource LoadMaterial(VrfGuiContext vrfGuiContext)
+    {
+        var fileSystem = GetShared(vrfGuiContext);
+        var materialPath = GetGamePath(vrfGuiContext, fileSystem);
+
+        Mount(vrfGuiContext, fileSystem);
+
+        return vrfGuiContext.LoadFileCompiled(materialPath)
+            ?? throw new InvalidDataException($"Failed to load material \"{materialPath}\".");
+    }
 
     /// <summary>
     /// The stream the viewer was given, rewound, or a new read stream of the file on disk when it was given none.

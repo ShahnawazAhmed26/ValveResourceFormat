@@ -179,7 +179,7 @@ internal sealed class Source1ParticleConverter
         foreach (var child in system.Children)
         {
             var entry = KVObject.Collection();
-            entry.Add("m_ChildRef", child.Name);
+            entry.Add("m_ChildRef", Source1ResourceProvider.GetParticlePath(child.Name));
             entry.Add("m_flDelay", child.Delay);
             entry.Add("m_bEndCap", child.EndCap);
             children.Add(entry);

@@ -112,16 +112,30 @@ public sealed class MaterialExtract
     }
 
     /// <summary>
-    /// Generates the output texture file name from a compiled texture path.
+    /// Generates the output texture file name from a compiled texture path, or from the path of a Source 1 texture.
     /// </summary>
     public static string OutTextureName(string texturePath, bool keepOriginalExtension, bool hdr, string? desiredSuffix = null)
     {
-        if (!texturePath.EndsWith(".vtex", StringComparison.OrdinalIgnoreCase))
+        var isSource1Texture = texturePath.EndsWith(".vtf", StringComparison.OrdinalIgnoreCase);
+
+        if (!isSource1Texture && !texturePath.EndsWith(".vtex", StringComparison.OrdinalIgnoreCase))
         {
-            throw new ArgumentException($"{texturePath} must have .vtex", nameof(texturePath));
+            throw new ArgumentException($"{texturePath} must have .vtex or .vtf", nameof(texturePath));
         }
 
-        texturePath = Path.ChangeExtension(texturePath, null); // strip '.vtex'
+        texturePath = Path.ChangeExtension(texturePath, null); // strip '.vtex' or '.vtf'
+
+        if (isSource1Texture)
+        {
+            // The name has no hash or original extension to restore
+            if (desiredSuffix is not null && !texturePath.EndsWith(desiredSuffix, StringComparison.OrdinalIgnoreCase))
+            {
+                texturePath = StripCommonTextureSuffix(texturePath) + desiredSuffix;
+            }
+
+            return Path.ChangeExtension(texturePath, hdr ? "exr" : "png");
+        }
+
         if (texturePath.EndsWith(".generated", StringComparison.OrdinalIgnoreCase))
         {
             texturePath = Path.ChangeExtension(texturePath, null);
@@ -146,14 +160,7 @@ public sealed class MaterialExtract
             // Strip e.g. _color if we want _metal
             if (!texturePath.EndsWith(desiredSuffix, StringComparison.OrdinalIgnoreCase))
             {
-                foreach (var suffix in BasicShaderDataProvider.CommonTextureSuffixes.Values)
-                {
-                    if (texturePath.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
-                    {
-                        texturePath = texturePath[..^suffix.Length];
-                        break;
-                    }
-                }
+                texturePath = StripCommonTextureSuffix(texturePath);
             }
             // Keep the hash to avoid conflicts
             texturePath += "_" + textureParts[^1] + desiredSuffix;
@@ -161,6 +168,19 @@ public sealed class MaterialExtract
 
         var extension = hdr ? "exr" : "png";
         return Path.ChangeExtension(texturePath, keepOriginalExtension ? textureParts[^2] : extension);
+    }
+
+    private static string StripCommonTextureSuffix(string texturePath)
+    {
+        foreach (var suffix in BasicShaderDataProvider.CommonTextureSuffixes.Values)
+        {
+            if (texturePath.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                return texturePath[..^suffix.Length];
+            }
+        }
+
+        return texturePath;
     }
 
     /// <summary>

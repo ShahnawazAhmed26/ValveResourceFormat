@@ -34,9 +34,10 @@ namespace ValveResourceFormat.Renderer.Shaders
         // uniform vec{dim} b = vec3(1.0); // SrgbRead(true)
         // uniform sampler{dim} c; // SrgbRead(true) Sampler(UserConfig)
         // uniform sampler{dim} d; // Sampler(UserConfig)
+        // uniform sampler{dim} g; // Sampler(Clamp) Default(White)
         // layout(binding = n) uniform sampler{dim} e;
         // uniform layout(binding = n) sampler{dim} f;
-        [GeneratedRegex("^(?:layout\\s*\\([^)]*\\)\\s*)?uniform (?:layout\\s*\\([^)]*\\)\\s*)?(?<Type>\\S+) (?<Name>[A-Za-z_][A-Za-z0-9_]*)(?<Array>\\[[^\\]]*\\])?(?:\\s*=\\s*(?<Default>[^;]+?))?\\s*;[ \t]*(?:// )?(?<SrgbRead>SrgbRead\\(true\\))?[ \t]*(?<SamplerUserConfig>Sampler\\(UserConfig\\))?[ \t]*(?<RepresentativeTexture>RepresentativeTexture)?")]
+        [GeneratedRegex("^(?:layout\\s*\\([^)]*\\)\\s*)?uniform (?:layout\\s*\\([^)]*\\)\\s*)?(?<Type>\\S+) (?<Name>[A-Za-z_][A-Za-z0-9_]*)(?<Array>\\[[^\\]]*\\])?(?:\\s*=\\s*(?<Default>[^;]+?))?\\s*;[ \t]*(?:// )?(?<SrgbRead>SrgbRead\\(true\\))?[ \t]*(?<SamplerMode>Sampler\\((?:UserConfig|Clamp)\\))?[ \t]*(?<RepresentativeTexture>RepresentativeTexture)?[ \t]*(?:Default\\((?<DefaultTexture>[A-Za-z]+)\\))?")]
         private static partial Regex RegexUniform();
 
         [GeneratedRegex("^#extension .+$")]
@@ -420,9 +421,17 @@ namespace ValveResourceFormat.Renderer.Shaders
                 {
                     parsedData.SrgbUniforms.Add(uniformName);
                 }
-                if (match.Groups["SamplerUserConfig"].Success)
+                if (match.Groups["SamplerMode"].Value == "Sampler(UserConfig)")
                 {
                     parsedData.SamplerUserConfigUniforms.Add(uniformName);
+                }
+                else if (match.Groups["SamplerMode"].Success)
+                {
+                    parsedData.SamplerClampUniforms.Add(uniformName);
+                }
+                if (match.Groups["DefaultTexture"].Success)
+                {
+                    parsedData.DefaultTextures[uniformName] = match.Groups["DefaultTexture"].Value;
                 }
                 if (match.Groups["RepresentativeTexture"].Success)
                 {

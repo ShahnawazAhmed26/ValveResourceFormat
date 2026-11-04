@@ -206,7 +206,7 @@ namespace ValveResourceFormat.Renderer
         }
 
         // The shader arguments of a draw call that its material does not derive
-        private static Dictionary<string, byte> GetDynamicShaderParams(DrawCall drawCall)
+        internal static Dictionary<string, byte> GetDynamicShaderParams(DrawCall drawCall)
         {
             var material = drawCall.Material;
             var staticParams = material.Material.GetShaderArguments();
@@ -421,7 +421,8 @@ namespace ValveResourceFormat.Renderer
 
                     AddDrawCall(drawCall, isAggregate);
 
-                    drawCall.VertexIdOffset = vertexOffset;
+                    // gl_VertexID already counts the base vertex of draw calls that share a vertex buffer
+                    drawCall.VertexIdOffset = vertexOffset - drawCall.BaseVertex;
                     vertexOffset += objectDrawCall.GetInt32Property("m_nVertexCount");
 
                     i++;
@@ -442,18 +443,11 @@ namespace ValveResourceFormat.Renderer
 
         /// <summary>Moves a draw call of this mesh into the opaque, overlay or blended list its material belongs in.</summary>
         /// <param name="drawCall">One of <see cref="DrawCalls"/>.</param>
-        /// <param name="forceOverlay">Whether to draw it as an overlay whatever its material says.</param>
-        internal void PlaceDrawCall(DrawCall drawCall, bool forceOverlay = false)
+        internal void PlaceDrawCall(DrawCall drawCall)
         {
             DrawCallsOpaque.Remove(drawCall);
             DrawCallsOverlay.Remove(drawCall);
             DrawCallsBlended.Remove(drawCall);
-
-            if (forceOverlay)
-            {
-                DrawCallsOverlay.Add(drawCall);
-                return;
-            }
 
             AddDrawCall(drawCall, isAggregate);
         }
@@ -519,12 +513,7 @@ namespace ValveResourceFormat.Renderer
                 drawCall.StartIndex = (nint)(objectDrawCall.GetUInt32Property("m_nStartIndex") * indexElementSize);
                 drawCall.IndexCount = objectDrawCall.GetInt32Property("m_nIndexCount");
 
-                drawCall.IndexType = indexElementSize switch
-                {
-                    2 => DrawElementsType.UnsignedShort,
-                    4 => DrawElementsType.UnsignedInt,
-                    _ => throw new UnexpectedMagicException("Unsupported index type", indexElementSize, nameof(indexElementSize)),
-                };
+                drawCall.IndexType = DrawCall.GetIndexType(indexElementSize);
             }
 
             // Vertex buffer
@@ -656,12 +645,7 @@ namespace ValveResourceFormat.Renderer
             var vb = vertexIndexBuffers.VertexBuffers[0];
             var ib = vertexIndexBuffers.IndexBuffers[0];
 
-            var indexType = ib.ElementSizeInBytes switch
-            {
-                2 => DrawElementsType.UnsignedShort,
-                4 => DrawElementsType.UnsignedInt,
-                _ => throw new UnexpectedMagicException("Unsupported index type", ib.ElementSizeInBytes, nameof(ib.ElementSizeInBytes)),
-            };
+            var indexType = DrawCall.GetIndexType(ib.ElementSizeInBytes);
 
             var drawCall = new DrawCall
             {

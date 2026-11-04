@@ -653,7 +653,6 @@ namespace ValveResourceFormat.Renderer
         public void Update(Scene.UpdateContext updateContext)
         {
             LightingDebug.Update(updateContext);
-            RendererContext.MaterialLoader.UpdateSource1Proxies(updateContext.Uptime);
 
             updating = true;
 
@@ -870,6 +869,7 @@ namespace ValveResourceFormat.Renderer
                     Identification = node.Id,
                     MorphVertexIdOffset = -1,
                     LightingData = LightingEntry(node),
+                    LightingOrigin = LightingPosition(node),
                 };
 
                 if (node is MeshCollectionNode meshNode)
@@ -1019,6 +1019,7 @@ namespace ValveResourceFormat.Renderer
                 ref var entry = ref instanceDataCpu[node.Id];
                 entry.TintAlpha = EntryTint(node);
                 entry.LightingData = LightingEntry(node);
+                entry.LightingOrigin = LightingPosition(node);
 
                 // An aggregate's slot starts its own run of instance transforms
                 if (entry.TransformIndex != 0 && node is not SceneAggregate { InstanceTransforms.Count: > 0 })
