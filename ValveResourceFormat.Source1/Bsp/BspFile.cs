@@ -14,7 +14,7 @@ internal sealed partial class BspFile
 
     private const int MinVersion = 19;
     private const int MaxVersion = 21;
-    private const int Identifier = 0x50534256;
+    private const int Identifier = (int)Source1Magic.Map;
     private const int LzmaIdentifier = 0x414D5A4C;
     private const int LzmaHeaderSize = 17;
     private const int HeaderSize = 8 + (HeaderLumpCount * 16) + 4;

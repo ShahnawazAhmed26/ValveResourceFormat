@@ -1088,7 +1088,7 @@ internal static class Source1MaterialConverter
             return 1f;
         }
 
-        return MathF.Pow(MathUtils.FloorToUnorm8Step(channel), 2.2f);
+        return ColorSpace.Gamma22ToLinear(MathUtils.FloorToUnorm8Step(channel));
     }
 
     private static bool? ResolveHdrCondition(string symbol, bool highDynamicRange)

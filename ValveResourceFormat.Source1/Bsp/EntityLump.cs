@@ -44,7 +44,7 @@ internal sealed class BspEntity
         return TryParseFloat(value, out var result) ? result : defaultValue;
     }
 
-    private static bool TryParseFloat(string value, out float result)
+    internal static bool TryParseFloat(string value, out float result)
         => float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out result);
 
     public Vector3 GetVector3(string key)

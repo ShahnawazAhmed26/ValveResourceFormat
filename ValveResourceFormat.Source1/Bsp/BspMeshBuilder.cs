@@ -257,8 +257,7 @@ internal static class BspMeshBuilder
 
     internal static Vector4 GetTangent(BspTextureInfo texInfo, Vector3 normal)
     {
-        var tangent = texInfo.TextureUAxis.Normal;
-        tangent -= normal * Vector3.Dot(tangent, normal);
+        var tangent = MathUtils.ProjectOntoPlane(texInfo.TextureUAxis.Normal, normal);
 
         var length = tangent.Length();
 

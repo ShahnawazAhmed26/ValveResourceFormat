@@ -12,7 +12,7 @@ namespace GUI.Utils;
 /// </summary>
 static class Source1Content
 {
-    private static readonly Dictionary<string, Source1FileSystem> SharedFileSystems = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Source1GameCache<Source1FileSystem> SharedFileSystems = new();
 
     /// <summary>
     /// The path on disk that the file was opened from: the file itself, or the package it is in.
@@ -26,24 +26,8 @@ static class Source1Content
     public static Source1FileSystem? GetShared(VrfGuiContext vrfGuiContext)
     {
         var diskPath = GetDiskPath(vrfGuiContext);
-        var key = Source1FileSystem.FindGameInfo(diskPath) ?? Path.GetDirectoryName(diskPath) ?? diskPath;
 
-        lock (SharedFileSystems)
-        {
-            if (SharedFileSystems.TryGetValue(key, out var fileSystem))
-            {
-                return fileSystem;
-            }
-
-            fileSystem = Source1FileSystem.FromPath(diskPath);
-
-            if (fileSystem != null)
-            {
-                SharedFileSystems.Add(key, fileSystem);
-            }
-
-            return fileSystem;
-        }
+        return SharedFileSystems.GetOrCreate(diskPath, () => Source1FileSystem.FromPath(diskPath));
     }
 
     /// <summary>
@@ -69,21 +53,10 @@ static class Source1Content
         return provider;
     }
 
-    /// <summary>"VTF" and a zero byte.</summary>
-    private const uint TextureMagic = 0x00465456;
-
-    /// <summary>"IDST", the magic of a studio model.</summary>
-    private const uint ModelMagic = 0x54534449;
-
-    /// <summary>"VBSP", the magic of a map.</summary>
-    private const uint MapMagic = 0x50534256;
-
     /// <summary>
     /// Whether the file is a Source 1 texture, model, map or material.
     /// </summary>
-    public static bool IsAccepted(uint magic, string fileName)
-        => magic is TextureMagic or ModelMagic or MapMagic
-        || fileName.EndsWith(".vmt", StringComparison.OrdinalIgnoreCase);
+    public static bool IsAccepted(uint magic, string fileName) => Source1Magic.IsSource1File(magic, fileName);
 
     /// <summary>A Source 1 file converted to a Source 2 resource.</summary>
     /// <param name="Resource">The converted resource.</param>
@@ -100,13 +73,13 @@ static class Source1Content
     {
         switch (magic)
         {
-            case TextureMagic:
+            case Source1Magic.Texture:
                 return new ConvertedFile(ConvertTexture(vrfGuiContext, stream), null);
 
-            case ModelMagic:
+            case Source1Magic.Model:
                 return new ConvertedFile(ConvertModel(vrfGuiContext, stream), null);
 
-            case MapMagic:
+            case Source1Magic.Map:
                 return ConvertMap(vrfGuiContext, stream);
 
             default:
@@ -143,37 +116,8 @@ static class Source1Content
         var package = vrfGuiContext.CurrentPackage;
         var modelDirectory = Path.GetDirectoryName(vrfGuiContext.FileName);
 
-        // The model's other files must come from the same place as the model, the game can override them with another build
-        Stream? OpenModelFile(string path)
-        {
-            if (path.Equals(modelPath, StringComparison.OrdinalIgnoreCase))
-            {
-                return OpenFile(vrfGuiContext, stream);
-            }
-
-            if (package != null)
-            {
-                var entry = package.FindEntry(path);
-
-                if (entry != null)
-                {
-                    return package.GetMemoryMappedStreamIfPossible(entry);
-                }
-            }
-            else if (modelDirectory != null)
-            {
-                var diskPath = Path.Combine(modelDirectory, Path.GetFileName(path));
-
-                if (File.Exists(diskPath))
-                {
-                    return new FileStream(diskPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                }
-            }
-
-            return fileSystem?.OpenFile(path);
-        }
-
-        var model = Source1Model.Load(modelPath, OpenModelFile);
+        var opener = new Source1ModelFileOpener(modelPath, () => OpenFile(vrfGuiContext, stream), package, modelDirectory, fileSystem);
+        var model = Source1Model.Load(modelPath, opener.Open);
 
         Mount(vrfGuiContext, fileSystem);
 

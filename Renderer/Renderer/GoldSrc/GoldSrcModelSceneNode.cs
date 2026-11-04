@@ -434,7 +434,7 @@ namespace ValveResourceFormat.Renderer.GoldSrc
 
             if (next >= span || next < 0f)
             {
-                next = Loop || sequence.IsLooping ? next - (span * MathF.Floor(next / span)) : Math.Clamp(next, 0f, span);
+                next = Loop || sequence.IsLooping ? MathUtils.Wrap(next, 0f, span) : Math.Clamp(next, 0f, span);
             }
 
             if (next == frame)

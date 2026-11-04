@@ -196,7 +196,7 @@ internal sealed partial class VtfFile
 
         var header = MemoryMarshal.Read<VtfHeader>(bytes);
 
-        if (header.Signature != 0x00465456)
+        if (header.Signature != (int)Source1Magic.Texture)
         {
             throw new UnexpectedMagicException("Invalid VTF signature", header.Signature, nameof(header.Signature));
         }

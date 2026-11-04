@@ -173,9 +173,9 @@ internal static class BspOverlayBuilder
         var first = bsp.GetVertexFromSurfEdge(face.FirstEdge);
         var second = bsp.GetVertexFromSurfEdge(face.FirstEdge + 1);
         var third = bsp.GetVertexFromSurfEdge(face.FirstEdge + 2);
-        var normal = Vector3.Cross(third - first, second - first);
+        var normal = MathUtils.TriangleCross(first, third, second);
 
-        return normal.LengthSquared() > Epsilon ? Vector3.Normalize(normal) : bsp.Planes[face.PlaneNum].Normal;
+        return MathUtils.SafeNormalize(normal, bsp.Planes[face.PlaneNum].Normal, Epsilon);
     }
 
     // The texture runs along the horizontal direction of the surface and down along world gravity

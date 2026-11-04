@@ -62,7 +62,7 @@ internal sealed partial class MdlFile
     {
         Hdr = LumpReader<Header>.ReadLumpAt(data, 0, 1)[0];
 
-        if (Hdr.Id != 0x54534449)
+        if (Hdr.Id != (int)Source1Magic.Model)
         {
             throw new UnexpectedMagicException("Not a MDL file", Hdr.Id, nameof(Hdr.Id));
         }

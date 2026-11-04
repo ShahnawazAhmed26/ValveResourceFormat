@@ -165,27 +165,12 @@ internal static class Source1LightConverter
 
     private static Vector3 ReadDynamicColor(BspEntity source)
     {
-        if (!source.Properties.TryGetValue("_light", out var text))
+        if (!source.Properties.ContainsKey("_light"))
         {
             return new Vector3(IntensityUnit);
         }
 
-        var parts = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-        return new Vector3(
-            ParseColorComponent(parts, 0),
-            ParseColorComponent(parts, 1),
-            ParseColorComponent(parts, 2));
-    }
-
-    private static float ParseColorComponent(string[] parts, int index)
-    {
-        if (index >= parts.Length || !TryParseFloat(parts[index], out var value))
-        {
-            return 0f;
-        }
-
-        return MathF.Truncate(value);
+        return Vector3.Truncate(source.GetVector3("_light"));
     }
 
     private static string ConvertEnvironment(BspEntity source, EntityLump.Entity target, Source1EntityConverterOptions options)
@@ -272,7 +257,7 @@ internal static class Source1LightConverter
 
         for (var i = 0; i < count; i++)
         {
-            if (!TryParseFloat(parts[offset + i], out values[i]) || values[i] < 0f)
+            if (!BspEntity.TryParseFloat(parts[offset + i], out values[i]) || values[i] < 0f)
             {
                 return false;
             }
@@ -293,9 +278,6 @@ internal static class Source1LightConverter
 
         return true;
     }
-
-    private static bool TryParseFloat(string text, out float value)
-        => float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
 
     // The color is normalized to its brightest channel in gamma space of 0-255 units, the brightness is what is left
     private static (Vector3 Color, float Brightness) SplitColor(Vector3 linear)

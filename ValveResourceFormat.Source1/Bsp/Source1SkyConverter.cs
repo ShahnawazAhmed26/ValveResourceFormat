@@ -1,4 +1,5 @@
 using System.IO;
+using System.Numerics.Tensors;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using SkiaSharp;
@@ -25,21 +26,9 @@ internal static class Source1SkyConverter
     // A compressed HDR sky texel is a linear color times a scale in its alpha, which the sky shader does not know of
     private const float CompressedHdrScale = 8f;
 
-    private readonly record struct SkyFace(string Suffix, Vector3 Forward, Vector3 Right, Vector3 Up);
-
     private readonly record struct SkyTexture(string? Path, string? HdrPath, Matrix4x4 Transform, Vector3 Color);
 
     private readonly record struct SkyImage(int Width, int Height, Vector4[] Texels);
-
-    private static readonly SkyFace[] SkyFaces =
-    [
-        new("ft", -Vector3.UnitY, -Vector3.UnitX, Vector3.UnitZ),
-        new("bk", Vector3.UnitY, Vector3.UnitX, Vector3.UnitZ),
-        new("lf", -Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ),
-        new("rt", Vector3.UnitX, -Vector3.UnitY, Vector3.UnitZ),
-        new("up", Vector3.UnitZ, -Vector3.UnitY, -Vector3.UnitX),
-        new("dn", -Vector3.UnitZ, -Vector3.UnitY, Vector3.UnitX),
-    ];
 
     /// <summary>Creates the sky of a <c>skyname</c>.</summary>
     /// <param name="fileSystem">Where the sky textures are read from.</param>
@@ -57,15 +46,17 @@ internal static class Source1SkyConverter
             return null;
         }
 
-        var skyTextures = new SkyTexture[SkyFaces.Length];
+        var skyTextures = new SkyTexture[SkyCube.FaceCount];
         var allHaveHdr = true;
         var allHaveLdr = true;
 
-        for (var i = 0; i < SkyFaces.Length; i++)
+        for (var i = 0; i < skyTextures.Length; i++)
         {
-            if (GetSkyTexture(fileSystem, skyName, SkyFaces[i].Suffix) is not { } skyTexture)
+            var suffix = SkyCube.GetSuffix(i);
+
+            if (GetSkyTexture(fileSystem, skyName, suffix) is not { } skyTexture)
             {
-                logger.LogWarning("Sky texture of materials/skybox/{Name}{Face}.vmt was not found", skyName, SkyFaces[i].Suffix);
+                logger.LogWarning("Sky texture of materials/skybox/{Name}{Face}.vmt was not found", skyName, suffix);
                 return null;
             }
 
@@ -79,11 +70,11 @@ internal static class Source1SkyConverter
 
         if (!useHdr && !allHaveLdr)
         {
-            for (var i = 0; i < SkyFaces.Length; i++)
+            for (var i = 0; i < skyTextures.Length; i++)
             {
                 if (skyTextures[i].Path == null)
                 {
-                    logger.LogWarning("Sky texture of materials/skybox/{Name}{Face}.vmt has no low dynamic range texture", skyName, SkyFaces[i].Suffix);
+                    logger.LogWarning("Sky texture of materials/skybox/{Name}{Face}.vmt has no low dynamic range texture", skyName, SkyCube.GetSuffix(i));
                     return null;
                 }
             }
@@ -100,13 +91,13 @@ internal static class Source1SkyConverter
             }
         }
 
-        var images = new SkyImage[SkyFaces.Length];
+        var images = new SkyImage[SkyCube.FaceCount];
 
         try
         {
             var size = 0;
 
-            for (var i = 0; i < SkyFaces.Length; i++)
+            for (var i = 0; i < images.Length; i++)
             {
                 var path = useHdr ? skyTextures[i].HdrPath! : skyTextures[i].Path!;
                 using var stream = fileSystem.OpenFile(path);
@@ -121,7 +112,7 @@ internal static class Source1SkyConverter
 
                 if (vtf.IsHighDynamicRange && !useHdr)
                 {
-                    logger.LogWarning("Sky texture {Name}{Face} is high dynamic range", skyName, SkyFaces[i].Suffix);
+                    logger.LogWarning("Sky texture {Name}{Face} is high dynamic range", skyName, SkyCube.GetSuffix(i));
                     return null;
                 }
 
@@ -224,7 +215,7 @@ internal static class Source1SkyConverter
 
     private static Resource CreateCube(int size, SkyImage[] images, SkyTexture[] skyTextures, bool isHdr)
     {
-        var faces = new ReadOnlyMemory<byte>[SkyFaces.Length];
+        var faces = new ReadOnlyMemory<byte>[SkyCube.FaceCount];
 
         for (var glFace = 0; glFace < faces.Length; glFace++)
         {
@@ -237,38 +228,23 @@ internal static class Source1SkyConverter
         return VrfTexture.Create((ushort)size, (ushort)size, format, VTexFlags.CUBE_TEXTURE, Vector4.One, faces);
     }
 
+    // The alpha of every texel is 1
     private static byte[] ToBytePixels(Vector4[] texels)
     {
-        var pixels = new byte[texels.Length * 4];
+        var values = MemoryMarshal.Cast<Vector4, float>(texels);
+        var pixels = new byte[values.Length];
 
-        for (var i = 0; i < texels.Length; i++)
-        {
-            var texel = texels[i];
-            var offset = i * 4;
-
-            pixels[offset] = (byte)MathF.Round(texel.X * 255f);
-            pixels[offset + 1] = (byte)MathF.Round(texel.Y * 255f);
-            pixels[offset + 2] = (byte)MathF.Round(texel.Z * 255f);
-            pixels[offset + 3] = 255;
-        }
+        TensorPrimitives.ConvertToClampedUnorm8(values, pixels);
 
         return pixels;
     }
 
     private static byte[] ToHalfPixels(Vector4[] texels)
     {
-        var pixels = new Half[texels.Length * 4];
+        var values = MemoryMarshal.Cast<Vector4, float>(texels);
+        var pixels = new Half[values.Length];
 
-        for (var i = 0; i < texels.Length; i++)
-        {
-            var texel = texels[i];
-            var offset = i * 4;
-
-            pixels[offset] = (Half)texel.X;
-            pixels[offset + 1] = (Half)texel.Y;
-            pixels[offset + 2] = (Half)texel.Z;
-            pixels[offset + 3] = Half.One;
-        }
+        TensorPrimitives.ConvertToHalf(values, pixels);
 
         return MemoryMarshal.AsBytes(pixels.AsSpan()).ToArray();
     }
@@ -276,61 +252,20 @@ internal static class Source1SkyConverter
     // The texel of the sky faces that each texel of a cube face looks at
     private static Vector4[] ResampleCubeFace(int glFace, int size, SkyImage[] images, SkyTexture[] skyTextures)
     {
-        // Every texel of a cube face looks furthest along the face's own axis, so one sky face fills all of it
-        var faceIndex = FindSkyFace(GetCubeDirection(glFace, 0f, 0f));
-        var face = SkyFaces[faceIndex];
+        var texCoords = SkyCube.GetFaceTexCoords(glFace, size, out var faceIndex);
         var image = images[faceIndex];
         var texCoordTransform = skyTextures[faceIndex].Transform;
-        var texels = new Vector4[size * size];
+        var texels = new Vector4[texCoords.Length];
 
-        for (var y = 0; y < size; y++)
+        for (var i = 0; i < texels.Length; i++)
         {
-            var v = (2f * (y + 0.5f) / size) - 1f;
+            var texCoord = Vector2.Transform(texCoords[i], texCoordTransform);
+            var sourceX = Math.Clamp((int)(texCoord.X * image.Width), 0, image.Width - 1);
+            var sourceY = Math.Clamp((int)(texCoord.Y * image.Height), 0, image.Height - 1);
 
-            for (var x = 0; x < size; x++)
-            {
-                var u = (2f * (x + 0.5f) / size) - 1f;
-                var direction = GetCubeDirection(glFace, u, v);
-                var forward = Vector3.Dot(direction, face.Forward);
-                var s = Vector3.Dot(direction, face.Right) / forward;
-                var t = Vector3.Dot(direction, face.Up) / forward;
-                var texCoord = Vector2.Transform(new Vector2((s + 1f) * 0.5f, (1f - t) * 0.5f), texCoordTransform);
-                var sourceX = Math.Clamp((int)(texCoord.X * image.Width), 0, image.Width - 1);
-                var sourceY = Math.Clamp((int)(texCoord.Y * image.Height), 0, image.Height - 1);
-
-                texels[(y * size) + x] = image.Texels[(sourceY * image.Width) + sourceX];
-            }
+            texels[i] = image.Texels[(sourceY * image.Width) + sourceX];
         }
 
         return texels;
-    }
-
-    private static Vector3 GetCubeDirection(int glFace, float u, float v) => glFace switch
-    {
-        0 => new Vector3(1f, -v, -u),
-        1 => new Vector3(-1f, -v, u),
-        2 => new Vector3(u, 1f, v),
-        3 => new Vector3(u, -1f, -v),
-        4 => new Vector3(u, -v, 1f),
-        _ => new Vector3(-u, -v, -1f),
-    };
-
-    private static int FindSkyFace(Vector3 direction)
-    {
-        var best = 0;
-        var bestDot = float.MinValue;
-
-        for (var i = 0; i < SkyFaces.Length; i++)
-        {
-            var dot = Vector3.Dot(direction, SkyFaces[i].Forward);
-
-            if (dot > bestDot)
-            {
-                bestDot = dot;
-                best = i;
-            }
-        }
-
-        return best;
     }
 }

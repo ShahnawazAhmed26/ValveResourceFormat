@@ -380,7 +380,7 @@ internal sealed class GoldSrcMdlFile
     /// Builds the rotation from angles in radians about x (roll), y (pitch) and z (yaw), applied as z, then y, then x.
     /// </summary>
     public static Quaternion EulerToQuaternion(float roll, float pitch, float yaw)
-        => EntityTransformHelper.EulerAnglesToQuaternion(new Vector3(float.RadiansToDegrees(pitch), float.RadiansToDegrees(yaw), float.RadiansToDegrees(roll)));
+        => EntityTransformHelper.EulerAnglesToQuaternionRadians(new Vector3(pitch, yaw, roll));
 
     // Each run stores "valid" values out of "total" frames, and the last stored value repeats for the rest of the run.
     private static float DecodeAnimationValue(byte[] source, int start, int frame)

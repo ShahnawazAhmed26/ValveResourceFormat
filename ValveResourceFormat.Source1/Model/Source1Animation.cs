@@ -624,13 +624,8 @@ internal sealed class Source1AnimationSource
             }
 
             rotations[bone] = Source1PoseMath.Slerp(rotations[bone], newRotation, weight);
-            positions[bone] = BlendLocalHierarchyPosition(positions[bone], newPosition, weight);
+            positions[bone] = MathUtils.Lerp(newPosition, positions[bone], weight);
         }
-    }
-
-    private static Vector3 BlendLocalHierarchyPosition(Vector3 original, Vector3 target, float weight)
-    {
-        return target + ((original - target) * weight);
     }
 
     private static bool TryGetLocalHierarchyWeight(MdlFile.LocalHierarchy hierarchy, float cycle, out float weight)

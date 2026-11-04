@@ -33,6 +33,8 @@ internal sealed partial class VtfFile
                 VtfFormat.DXT5 => new DecodeBCn(width, height, BlockFormat.BC3),
                 VtfFormat.ATI1N => new DecodeBCn(width, height, BlockFormat.BC4U),
                 VtfFormat.ATI2N => new DecodeBCn(width, height, BlockFormat.BC5U),
+                VtfFormat.I8 => new DecodeI8(),
+                VtfFormat.IA88 => new DecodeIA88(),
                 VtfFormat.BGRA8888 => new DecodeBGRA8888(),
                 VtfFormat.RGBA8888 => new DecodeRGBA8888(),
                 VtfFormat.RGBA16161616 => new DecodeRGBA16161616(),
@@ -49,8 +51,7 @@ internal sealed partial class VtfFile
 
                 if (format == VtfFormat.ATI2N)
                 {
-                    using var normalPixmap = bitmap.PeekPixels();
-                    ReconstructNormalZ(normalPixmap.GetPixelSpan<byte>());
+                    Common.ApplyTextureConversions(bitmap, TextureCodec.NormalizeNormals);
                 }
 
                 return bitmap;
@@ -70,20 +71,6 @@ internal sealed partial class VtfFile
         }
     }
 
-    // A two channel normal map stores x and y. Pixels are BGRA, with the decoded x in red and y in green.
-    private static void ReconstructNormalZ(Span<byte> pixels)
-    {
-        for (var i = 0; i < pixels.Length; i += 4)
-        {
-            var x = (pixels[i + 2] / 255f * 2f) - 1f;
-            var y = (pixels[i + 1] / 255f * 2f) - 1f;
-            var z = MathF.Sqrt(MathF.Max(0f, 1f - (x * x) - (y * y)));
-
-            pixels[i] = (byte)MathF.Round((z * 0.5f + 0.5f) * 255f);
-            pixels[i + 3] = 255;
-        }
-    }
-
     internal static void ConvertPixels(ReadOnlySpan<byte> source, Span<byte> destination, VtfFormat format)
     {
         var stride = format switch
@@ -92,10 +79,10 @@ internal sealed partial class VtfFile
                 or VtfFormat.RGB888_BLUESCREEN or VtfFormat.BGR888_BLUESCREEN => 3,
             VtfFormat.ARGB8888 or VtfFormat.ABGR8888 or VtfFormat.BGRX8888
                 or VtfFormat.UVWQ8888 or VtfFormat.UVLX8888 => 4,
-            VtfFormat.IA88 or VtfFormat.UV88
+            VtfFormat.UV88
                 or VtfFormat.BGR565 or VtfFormat.BGRA4444
                 or VtfFormat.BGRX5551 or VtfFormat.BGRA5551 => 2,
-            VtfFormat.I8 or VtfFormat.A8 => 1,
+            VtfFormat.A8 => 1,
             _ => throw new NotSupportedException($"VTF conversion: {format}")
         };
 
@@ -174,11 +161,6 @@ internal sealed partial class VtfFile
                             : (byte)255;
                     }
 
-                    break;
-                case VtfFormat.I8:
-                case VtfFormat.IA88:
-                    destination[j] = destination[j + 1] = destination[j + 2] = source[i];
-                    destination[j + 3] = format == VtfFormat.IA88 ? source[i + 1] : (byte)255;
                     break;
                 case VtfFormat.A8:
                     destination[j] = destination[j + 1] = destination[j + 2] = 0;

@@ -1,4 +1,5 @@
 using ValveResourceFormat.GoldSrc;
+using ValveResourceFormat.Source1.Bsp;
 
 namespace ValveResourceFormat.Renderer.GoldSrc
 {
@@ -63,10 +64,9 @@ namespace ValveResourceFormat.Renderer.GoldSrc
 
             candidates.Sort((a, b) => extents[b].Height.CompareTo(extents[a].Height));
 
-            // Rows filled from the tallest lightmap down, in an atlas that is always the full width
-            var x = 0;
-            var y = 0;
-            var rowHeight = 0;
+            // The atlas is always the full width and as tall as the packed lightmaps
+            var packer = new SkylinePacker(MaxWidth, int.MaxValue);
+            var usedHeight = 0;
 
             foreach (var faceIndex in candidates)
             {
@@ -74,24 +74,24 @@ namespace ValveResourceFormat.Renderer.GoldSrc
                 var paddedWidth = extent.Width + (Border * 2);
                 var paddedHeight = extent.Height + (Border * 2);
 
-                if (x + paddedWidth > MaxWidth)
+                if (!packer.TryPack(paddedWidth, paddedHeight, out var x, out var y))
                 {
-                    x = 0;
-                    y += rowHeight;
-                    rowHeight = 0;
+                    continue;
                 }
 
                 placements[faceIndex] = new Placement(extent.Width, extent.Height, x + Border, y + Border, extent.MinS, extent.MinT);
-                x += paddedWidth;
-                rowHeight = Math.Max(rowHeight, paddedHeight);
+                usedHeight = Math.Max(usedHeight, y + paddedHeight);
             }
 
             Width = MaxWidth;
-            Height = (int)BitOperations.RoundUpToPowerOf2((uint)Math.Max(1, y + rowHeight));
+            Height = (int)BitOperations.RoundUpToPowerOf2((uint)Math.Max(1, usedHeight));
 
             foreach (var faceIndex in candidates)
             {
-                Copy(faces[faceIndex], placements[faceIndex], lighting);
+                if (HasLightmap(faceIndex))
+                {
+                    Copy(faces[faceIndex], placements[faceIndex], lighting);
+                }
             }
         }
 

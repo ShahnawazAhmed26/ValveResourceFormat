@@ -47,6 +47,13 @@ namespace ValveResourceFormat.Utils
         }
 
         /// <summary>
+        /// Converts a gamma space channel to linear with a plain 2.2 exponent, the inverse of <see cref="LinearToGamma22(Vector3)"/>.
+        /// </summary>
+        /// <param name="gammaChannel">The channel value in gamma space.</param>
+        /// <returns>The channel value in linear space.</returns>
+        public static float Gamma22ToLinear(float gammaChannel) => MathF.Pow(gammaChannel, 2.2f);
+
+        /// <summary>
         /// Converts an sRGB gamma space color to linear RGB.
         /// </summary>
         public static Vector3 SrgbGammaToLinear(Vector3 vSrgbGammaColor)

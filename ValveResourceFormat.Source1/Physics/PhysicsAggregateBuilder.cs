@@ -388,8 +388,7 @@ internal sealed class PhysicsAggregateBuilder
 
     private static Vector3 GetTriangleCross(IReadOnlyList<Vector3> points, int[] corners, int triangle)
     {
-        var first = points[corners[triangle * 3]];
-        return Vector3.Cross(points[corners[(triangle * 3) + 1]] - first, points[corners[(triangle * 3) + 2]] - first);
+        return MathUtils.TriangleCross(points[corners[triangle * 3]], points[corners[(triangle * 3) + 1]], points[corners[(triangle * 3) + 2]]);
     }
 
     // Walks the boundary of a face once around, keeping its corners, or returns null when it is not one loop

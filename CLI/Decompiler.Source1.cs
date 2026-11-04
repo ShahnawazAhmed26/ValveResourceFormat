@@ -14,10 +14,6 @@ namespace CLI
 {
     public partial class Decompiler
     {
-        private const uint VtfMagic = 0x00465456;
-        private const uint StudioModelMagic = 0x54534449;
-        private const uint BspMagic = 0x50534256;
-
         private sealed class Source1TestGame : IDisposable
         {
             public Source1FileSystem FileSystem { get; }
@@ -44,7 +40,7 @@ namespace CLI
         /// <summary>
         /// Games that textures, materials and models are converted in, shared by the files of each game.
         /// </summary>
-        private readonly Dictionary<string, Source1TestGame?> Source1TestGames = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Source1GameCache<Source1TestGame> Source1TestGames = new();
 
         private bool IsSupportedFileName(string fileName)
             => SupportedFileNamesRegex().IsMatch(fileName) || (CollectStats && Source1FileNamesRegex().IsMatch(fileName));
@@ -68,30 +64,10 @@ namespace CLI
                 return null;
             }
 
-            var key = Source1FileSystem.FindGameInfo(diskPath) ?? Path.GetDirectoryName(diskPath) ?? diskPath;
-
-            lock (Source1TestGames)
-            {
-                if (!Source1TestGames.TryGetValue(key, out var game))
-                {
-                    game = CreateSource1TestGame(diskPath);
-                    Source1TestGames.Add(key, game);
-                }
-
-                return game;
-            }
+            return Source1TestGames.GetOrCreate(diskPath, () => CreateSource1TestGame(diskPath));
         }
 
-        private void DisposeSource1TestGames()
-        {
-            lock (Source1TestGames)
-            {
-                foreach (var game in Source1TestGames.Values)
-                {
-                    game?.Dispose();
-                }
-            }
-        }
+        private void DisposeSource1TestGames() => Source1TestGames.Dispose();
 
         /// <summary>
         /// Converts a Source 1 texture, material, model or map to Source 2 resources and tests them like any other resource.
@@ -99,9 +75,7 @@ namespace CLI
         /// <returns>False if the file is not a Source 1 file.</returns>
         private bool TryTestSource1File(string path, Stream stream, uint magic, string? originalPath, Package? package)
         {
-            var isMaterial = Path.GetExtension(path).Equals(".vmt", StringComparison.OrdinalIgnoreCase);
-
-            if (magic != VtfMagic && magic != StudioModelMagic && magic != BspMagic && !isMaterial)
+            if (!Source1Magic.IsSource1File(magic, path))
             {
                 return false;
             }
@@ -110,15 +84,15 @@ namespace CLI
             {
                 var diskPath = package?.FileName ?? path;
 
-                if (magic == VtfMagic)
+                if (magic == Source1Magic.Texture)
                 {
                     TestSource1Texture(path, stream, originalPath);
                 }
-                else if (magic == StudioModelMagic)
+                else if (magic == Source1Magic.Model)
                 {
                     TestSource1Model(path, stream, originalPath, package, GetSharedSource1TestGame(diskPath));
                 }
-                else if (magic == BspMagic)
+                else if (magic == Source1Magic.Map)
                 {
                     TestSource1Map(path, stream, originalPath, diskPath);
                 }
@@ -166,38 +140,14 @@ namespace CLI
             var gamePath = GetSource1GamePath(path, package, game);
             var directory = Path.GetDirectoryName(path);
 
-            // The files of a model come from the same place as the model, since the game can have other builds of them
-            Stream? OpenFile(string name)
+            Stream OpenModel()
             {
-                if (name.Equals(gamePath, StringComparison.OrdinalIgnoreCase))
-                {
-                    stream.Position = 0;
-                    return stream;
-                }
-
-                if (package != null)
-                {
-                    var entry = package.FindEntry(name);
-
-                    if (entry != null)
-                    {
-                        return package.GetMemoryMappedStreamIfPossible(entry);
-                    }
-                }
-                else if (directory != null)
-                {
-                    var siblingPath = Path.Combine(directory, Path.GetFileName(name));
-
-                    if (File.Exists(siblingPath))
-                    {
-                        return new FileStream(siblingPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                    }
-                }
-
-                return game?.FileSystem.OpenFile(name);
+                stream.Position = 0;
+                return stream;
             }
 
-            var source = Source1Model.Load(gamePath, OpenFile);
+            var opener = new Source1ModelFileOpener(gamePath, OpenModel, package, directory, game?.FileSystem);
+            var source = Source1Model.Load(gamePath, opener.Open);
             var model = Source1ModelConverter.Convert(source, gamePath, game?.FileSystem);
 
             using var resource = model.Resource;

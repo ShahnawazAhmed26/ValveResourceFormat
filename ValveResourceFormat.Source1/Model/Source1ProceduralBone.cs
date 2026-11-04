@@ -19,6 +19,7 @@ internal abstract class Source1ProceduralBone
 
     /// <summary>Dot product at which two directions count as parallel.</summary>
     protected const float DegenerateDot = 0.9999999f;
+    private const float MinimumLengthSquared = 1e-12f;
 
     /// <summary>
     /// Replaces the model-space transform of a bone. On entry, <paramref name="boneToModel"/> holds the final
@@ -132,19 +133,6 @@ internal abstract class Source1ProceduralBone
         boneToModel[boneIndex] = (uint)parent < (uint)boneIndex ? local * boneToModel[parent] : local;
     }
 
-    /// <summary>Normalizes a vector, leaving a vector too short to have a direction as zero.</summary>
-    protected static Vector3 NormalizeOrZero(Vector3 value)
-    {
-        var length = value.Length();
-
-        if (length < 1e-6f)
-        {
-            return Vector3.Zero;
-        }
-
-        return value / length;
-    }
-
     /// <summary>Expresses a model-space direction in the frame of a model-space transform.</summary>
     protected static Vector3 InverseRotate(Vector3 value, Matrix4x4 frame)
     {
@@ -158,7 +146,8 @@ internal abstract class Source1ProceduralBone
     /// <summary>Whether a bone index refers to a bone that is already placed.</summary>
     protected static bool IsEarlierBone(int index, int boneIndex) => (uint)index < (uint)boneIndex;
 
-    protected static float SafeAcos(float value) => MathF.Acos(Math.Clamp(value, -1f, 1f));
+    /// <summary>Normalizes a vector, leaving a vector too short to have a direction as zero.</summary>
+    protected static Vector3 NormalizeOrZero(Vector3 value) => MathUtils.SafeNormalize(value, Vector3.Zero, MinimumLengthSquared);
 }
 
 /// <summary>
@@ -285,7 +274,7 @@ internal sealed class Source1QuatInterpBone : Source1ProceduralBone
         {
             var trigger = Triggers[i];
             var dot = MathF.Abs(Quaternion.Dot(trigger.Trigger, controlRotation));
-            var weight = MathF.Max(0f, 1f - (trigger.InverseToleranceAngle * 2f * SafeAcos(dot)));
+            var weight = MathF.Max(0f, 1f - (trigger.InverseToleranceAngle * 2f * MathUtils.SafeAcos(dot)));
 
             weights[i] = weight;
             totalWeight += weight;
@@ -362,7 +351,7 @@ internal sealed class Source1AimAtBone : Source1ProceduralBone
 
         var direction = NormalizeOrZero(target - origin);
         var axis = NormalizeOrZero(Vector3.Cross(AimVector, direction));
-        var aimRotation = Quaternion.CreateFromAxisAngle(axis, SafeAcos(Vector3.Dot(direction, AimVector)));
+        var aimRotation = Quaternion.CreateFromAxisAngle(axis, MathUtils.SafeAcos(Vector3.Dot(direction, AimVector)));
 
         var rotation = aimRotation;
 
@@ -381,7 +370,7 @@ internal sealed class Source1AimAtBone : Source1ProceduralBone
                 upAxis = NormalizeOrZero(Vector3.Cross(wanted, current));
             }
 
-            var upRotation = Quaternion.CreateFromAxisAngle(upAxis, SafeAcos(upDot));
+            var upRotation = Quaternion.CreateFromAxisAngle(upAxis, MathUtils.SafeAcos(upDot));
             rotation = Source1PoseMath.Multiply(upRotation, aimRotation);
         }
 
@@ -423,6 +412,6 @@ internal sealed class Source1AimAtBone : Source1ProceduralBone
 
     private static Vector3 RemoveComponent(Vector3 value, Vector3 direction)
     {
-        return NormalizeOrZero(value - (direction * Vector3.Dot(value, direction)));
+        return NormalizeOrZero(MathUtils.ProjectOntoPlane(value, direction));
     }
 }
