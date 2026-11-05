@@ -523,6 +523,7 @@ namespace ValveResourceFormat
                 BlockType.SPRV => new SboxShader(BlockType.SPRV) { Resource = this },
                 BlockType.RVUP => new ResourceVersionUpdate() { Resource = this },
                 BlockType.QCTI => new BinaryKV3(BlockType.QCTI) { Resource = this },
+                BlockType.GBJF => new BinaryKV3(BlockType.GBJF) { Resource = this },
                 _ => throw new ArgumentException($"Unrecognized block type '{Encoding.ASCII.GetString(BitConverter.GetBytes((uint)blockType))}'"),
             };
         }
