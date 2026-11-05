@@ -154,5 +154,10 @@ namespace ValveResourceFormat
         /// Resource version/update metadata stored as binary KV3.
         /// </summary>
         RVUP = 'R' | ('V' << 8) | ('U' << 16) | ('P' << 24),
+
+        /// <summary>
+        /// Custom item metadata stored as binary KV3.
+        /// </summary>
+        QCTI = 'Q' | ('C' << 8) | ('T' << 16) | ('I' << 24),
     }
 }

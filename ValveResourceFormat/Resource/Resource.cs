@@ -262,8 +262,18 @@ namespace ValveResourceFormat
 
                 if (block.Type is BlockType.RED2 or BlockType.REDI)
                 {
-                    block.Read(Reader);
-                    EditInfo = (ResourceEditInfo)block;
+                    try
+                    {
+                        block.Read(Reader);
+                        EditInfo = (ResourceEditInfo)block;
+                    }
+                    catch (UnexpectedMagicException) when (block.Type == BlockType.RED2)
+                    {
+                        // Some resources contain newer or custom RED2 metadata. The resource payload can still be read when its type is known from the file extension.
+                        Blocks.Remove(block);
+                        Reader.BaseStream.Position = position + 8;
+                        continue;
+                    }
 
                     // Try to determine resource type by looking at the compiler identifiers
                     // This must be done right after reading EditInfo because future DATA block
@@ -295,7 +305,15 @@ namespace ValveResourceFormat
             {
                 if (block.Type is not BlockType.REDI and not BlockType.RED2 and not BlockType.NTRO)
                 {
-                    block.Read(Reader);
+                    try
+                    {
+                        block.Read(Reader);
+                    }
+                    catch (UnexpectedMagicException) when (block.Type == BlockType.QCTI)
+                    {
+                        // QCTI is optional custom metadata and may use a newer KV3 node type.
+                        continue;
+                    }
                 }
             }
 
@@ -504,6 +522,7 @@ namespace ValveResourceFormat
                 BlockType.PHYS => new PhysAggregateData(BlockType.PHYS) { Resource = this },
                 BlockType.SPRV => new SboxShader(BlockType.SPRV) { Resource = this },
                 BlockType.RVUP => new ResourceVersionUpdate() { Resource = this },
+                BlockType.QCTI => new BinaryKV3(BlockType.QCTI) { Resource = this },
                 _ => throw new ArgumentException($"Unrecognized block type '{Encoding.ASCII.GetString(BitConverter.GetBytes((uint)blockType))}'"),
             };
         }
