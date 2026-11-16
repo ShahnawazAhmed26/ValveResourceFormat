@@ -293,7 +293,11 @@ namespace ValveResourceFormat.ResourceTypes
             {
                 if (!embeddedMesh.ContainsKey("vbib_block")) // MVTX MIDX update
                 {
-                    meshes.Add(ParseEmbeddedMesh2(embeddedMesh));
+                    if (ParseEmbeddedMesh2(embeddedMesh) is { } parsedMesh)
+                    {
+                        meshes.Add(parsedMesh);
+                    }
+
                     continue;
                 }
 
@@ -331,7 +335,7 @@ namespace ValveResourceFormat.ResourceTypes
             return cachedEmbeddedMeshes;
         }
 
-        private ModelMesh ParseEmbeddedMesh2(KVObject embeddedMesh)
+        private ModelMesh? ParseEmbeddedMesh2(KVObject embeddedMesh)
         {
             var name = embeddedMesh.GetStringProperty("m_Name");
             var meshIndex = (int)embeddedMesh.GetIntegerProperty("m_nMeshIndex");
@@ -339,10 +343,22 @@ namespace ValveResourceFormat.ResourceTypes
 
             var mesh = Resource.GetBlockByIndex(dataBlockIndex) as Mesh;
             Debug.Assert(mesh is not null);
-            mesh.VBIB = new VBIB(Resource, embeddedMesh)
+
+            try
             {
-                Resource = Resource
-            };
+                mesh!.VBIB = new VBIB(Resource, embeddedMesh)
+                {
+                    Resource = Resource
+                };
+            }
+            catch (ArgumentException exception) when (exception.Message.StartsWith("Invalid vertex buffer header", StringComparison.Ordinal)
+                || exception.Message.StartsWith("Invalid index buffer header", StringComparison.Ordinal))
+            {
+                // Some shipped assets retain mesh metadata after their streamed MVTX/MIDX payload was stripped.
+                // There is no geometry to decode, so omit only this mesh and keep exporting the package.
+                return null;
+            }
+
             mesh.Name = $"{Resource.FileName}:{name}";
 
             var morphBlockIndex = (int)embeddedMesh.GetIntegerProperty("m_nMorphBlock");

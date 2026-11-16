@@ -164,5 +164,10 @@ namespace ValveResourceFormat
         /// Custom particle metadata stored as binary KV3.
         /// </summary>
         GBJF = 'G' | ('B' << 8) | ('J' << 16) | ('F' << 24),
+
+        /// <summary>
+        /// Opaque block emitted by newer Source 2 material compilers.
+        /// </summary>
+        WXIE = 'W' | ('X' << 8) | ('I' << 16) | ('E' << 24),
     }
 }
